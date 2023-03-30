@@ -7,3 +7,4 @@
 
 
 # Socials:
+<a href="https://www.linkedin.com/in/tilemachos-spanos-961428231/" </a>
