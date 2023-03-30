@@ -7,6 +7,5 @@
 
 
 # Socials:
-<img src="{[BadgeURLHere](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)}", 
- <a href: "https://www.linkedin.com/in/tilemachos-spanos-961428231/" </a> />
+<img src="{https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white}" />
 
