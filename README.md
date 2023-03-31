@@ -42,6 +42,7 @@
 
 # My GitHub Stats
 ![Your Repository's Stats](https://github-readme-stats.vercel.app/api?username=tilspanos&show_icons=true) <br>
+:chart_with_upwards_trend:
 ![Your Repository's Stats](https://github-readme-stats.vercel.app/api/top-langs/?username=tilspanos&theme=blue-green)
 
 
