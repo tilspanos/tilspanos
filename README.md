@@ -3,6 +3,7 @@
  :computer: I'm an aspiring Junior Software Developer <br>
  :books: I'm currently attending a 6-month coding bootcamp at Athens University of Economics and Business <br>
  :dart: I'm mostly focusing on JavaScript, TypeScript and Front-End technologies! <br>
+ ![Bitcoin](https://img.shields.io/badge/Bitcoin-000?style=for-the-badge&logo=bitcoin&logoColor=white) enthusiast!
  :speech_balloon: Ask me anything!
 
 
