@@ -42,6 +42,6 @@
 
 # My GitHub Stats
 ![Your Repository's Stats](https://github-readme-stats.vercel.app/api?username=tilspanos&show_icons=true) <br>
-![Your Repository's Stats](https://github-readme-stats.vercel.app/api/top-langs/?username=Your_GitHub_Username&theme=blue-green)
+![Your Repository's Stats](https://github-readme-stats.vercel.app/api/top-langs/?username=tilspanos&theme=blue-green)
 
 
