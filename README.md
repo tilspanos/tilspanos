@@ -1,4 +1,5 @@
- # :wave:Hi I'm Tilemachos!
+ # :wave:Hi I'm Tilemachos! <br>
+ # More about me! :point_down:
  
  :computer: I'm an aspiring Junior Software Developer <br>
  :books: I'm currently attending a 6-month coding bootcamp at Athens University of Economics and Business <br>
