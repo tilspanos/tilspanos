@@ -41,6 +41,7 @@
 ![WebStorm](https://img.shields.io/badge/webstorm-143?style=for-the-badge&logo=webstorm&logoColor=white&color=black)
 
 # My GitHub Stats
-![Your Repository's Stats](https://github-readme-stats.vercel.app/api?username=tilspanos&show_icons=true)
+![Your Repository's Stats](https://github-readme-stats.vercel.app/api?username=tilspanos&show_icons=true) <br>
+![Your Repository's Stats](https://github-readme-stats.vercel.app/api/top-langs/?username=Your_GitHub_Username&theme=blue-green)
 
 
