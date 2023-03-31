@@ -40,5 +40,7 @@
 ![Visual Studio Code](https://img.shields.io/badge/Visual%20Studio%20Code-0078d7.svg?style=for-the-badge&logo=visual-studio-code&logoColor=white)
 ![WebStorm](https://img.shields.io/badge/webstorm-143?style=for-the-badge&logo=webstorm&logoColor=white&color=black)
 
+# My GitHub Stats
+![Your Repository's Stats](https://github-readme-stats.vercel.app/api?username=tilspanos&show_icons=true)
 
 
