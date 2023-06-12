@@ -1,8 +1,8 @@
  # :wave:Hi I'm Tilemachos! <br>
  
  :computer: I'm an aspiring Junior Software Developer <br>
- :books: I'm currently attending a 6-month coding bootcamp at Athens University of Economics and Business <br>
- :dart: I'm mainly focused on JavaScript, TypeScript and Front-End technologies! <br>
+ :books: I currently graduated from a 8-month coding bootcamp at Athens University of Economics and Business <br>
+ :dart: I'm mainly focused on Python, Django and full stack technologies! <br>
  :speech_balloon: Ask me anything!
 
 
