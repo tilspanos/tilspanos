@@ -22,7 +22,7 @@
 
 
 # :chart_with_upwards_trend: My GitHub Stats
-![Your Repository's Stats](https://github-readme-stats.vercel.app/api?username=tilspanos&show_icons=true) <br>
-![Your Repository's Stats](https://github-readme-stats.vercel.app/api/top-langs/?username=tilspanos&theme=blue-green)
+![tokyonight](https://awesome-github-stats.azurewebsites.net/user-stats/tilspanos?theme=tokyonight)        <br>
+![Tilspanos's GitHub stats](https://github-readme-stats.vercel.app/api?username=tilspanos&show_icons=true&theme=tokyonight)
 
 
