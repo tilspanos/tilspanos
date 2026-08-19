@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RH Lighter Fleet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg: #0b0e14; --panel: #12161f; --panel2: #171c27; --accent: #8b5cf6;
+  --pos: #3ecf8e; --neg: #f2545b; --warn: #e8b339; --muted: #7c8494;
+  --line: #1f2532; --text: #e6e9f0;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: Inter, system-ui, sans-serif; font-size: 14px;
+  overflow-x: hidden;
+}
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+/* backdrop: grid overlay + gradient blobs */
+.backdrop { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+.backdrop::before {
+  content: ""; position: absolute; inset: 0;
+  background-image: linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 42px 42px; opacity: .35;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 30%, transparent 80%);
+}
+.blob { position: absolute; border-radius: 50%; filter: blur(110px); opacity: .28; }
+.blob.a { width: 480px; height: 480px; background: #8b5cf6; top: -180px; left: -120px; }
+.blob.b { width: 420px; height: 420px; background: #2563eb; top: -140px; right: -100px; }
+
+.wrap { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+
+/* ── header ─────────────────────────────────────────── */
+header {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px;
+  backdrop-filter: blur(8px);
+}
+.brand { font-weight: 700; font-size: 15px; letter-spacing: .3px; }
+.brand small { color: var(--muted); font-weight: 500; display: block; font-size: 11px; }
+.live { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.dot.on { background: var(--pos); box-shadow: 0 0 0 0 rgba(62,207,142,.6); animation: pulse 1.6s infinite; }
+.dot.paused { background: var(--warn); }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(62,207,142,.55); }
+  70% { box-shadow: 0 0 0 9px rgba(62,207,142,0); }
+  100% { box-shadow: 0 0 0 0 rgba(62,207,142,0); }
+}
+.hmeta { color: var(--muted); font-size: 13px; }
+.hmeta b { color: var(--text); }
+.spacer { flex: 1; }
+button {
+  font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+  border-radius: 9px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--text); padding: 8px 16px;
+  transition: filter .15s, transform .05s;
+}
+button:hover { filter: brightness(1.25); }
+button:active { transform: translateY(1px); }
+button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+button.danger { background: transparent; border-color: var(--neg); color: var(--neg); }
+button.warn { background: transparent; border-color: var(--warn); color: var(--warn); }
+
+/* ── stat cards ─────────────────────────────────────── */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 16px 0; }
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 14px 16px;
+}
+.card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
+.card .value { font-size: 24px; font-weight: 700; margin-top: 6px; }
+.card .value.pos { color: var(--pos); } .card .value.neg { color: var(--neg); }
+
+/* ── panels ─────────────────────────────────────────── */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+.panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; font-weight: 600; }
+
+/* ── pair pills ─────────────────────────────────────── */
+.pillbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.pill {
+  border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+  border-radius: 999px; padding: 5px 13px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: all .12s;
+}
+.pill:hover { color: var(--text); border-color: var(--muted); }
+.pill.on { background: color-mix(in srgb, var(--accent) 22%, var(--panel2)); border-color: var(--accent); color: #cdbcff; }
+.pill.groupbtn { border-style: dashed; }
+.groups { margin-bottom: 12px; }
+.pill-section { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; margin: 10px 0 6px; font-weight: 600; }
+
+/* ── tables ─────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: right; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; }
+td { text-align: right; padding: 7px 10px; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
+.sym { font-weight: 700; }
+.tag { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.pos-txt { color: var(--pos); } .neg-txt { color: var(--neg); } .muted { color: var(--muted); }
+.side-buy { color: var(--pos); font-weight: 700; } .side-sell { color: var(--neg); font-weight: 700; }
+.flatbtn { padding: 3px 10px; font-size: 11px; border-radius: 6px; }
+
+/* ── activity log ───────────────────────────────────── */
+.log { max-height: 320px; overflow-y: auto; font-size: 12.5px; line-height: 1.85; }
+.log .row { display: flex; gap: 10px; white-space: nowrap; }
+.log .t { color: var(--muted); }
+.log .ok { color: var(--pos); } .log .warn { color: var(--warn); } .log .err { color: var(--neg); }
+.log .msg { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.log::-webkit-scrollbar { width: 8px; } .log::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.empty { color: var(--muted); padding: 18px 0; text-align: center; font-size: 13px; }
+.grid2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 14px; }
+@media (max-width: 980px) { .grid2 { grid-template-columns: 1fr; } }
+.conn-badge { font-size: 11px; color: var(--muted); }
+.conn-badge.err { color: var(--neg); }
+</style>
+</head>
+<body>
+<div class="backdrop"><div class="blob a"></div><div class="blob b"></div></div>
+<div class="wrap">
+
+<header>
+  <div class="brand">RH LIGHTER FLEET<small>api.rh.lighter.xyz &middot; USDG &middot; chain 466324</small></div>
+  <div class="live"><span id="dot" class="dot"></span><span id="liveTxt">OFFLINE</span></div>
+  <div class="hmeta">Fleet: <b id="fleetCount" class="mono">0/0</b> markets</div>
+  <div class="hmeta">Session: <b id="sessionTime" class="mono">00:00:00</b></div>
+  <div class="hmeta conn-badge" id="connBadge">connecting&hellip;</div>
+  <div class="spacer"></div>
+  <button class="primary" id="btnStart">Start</button>
+  <button class="warn" id="btnPause">Pause</button>
+  <button id="btnStop">Stop</button>
+  <button class="danger" id="btnFlattenAll">Flatten All</button>
+</header>
+
+<div class="cards">
+  <div class="card"><div class="label">Volume Routed</div><div class="value mono" id="stVolume">$0</div></div>
+  <div class="card"><div class="label">Fills</div><div class="value mono" id="stFills">0</div></div>
+  <div class="card"><div class="label">Est. Spread PnL</div><div class="value mono" id="stPnl">$0.00</div></div>
+  <div class="card"><div class="label">Open Orders</div><div class="value mono" id="stOrders">0</div></div>
+  <div class="card"><div class="label">Margin Used</div><div class="value mono" id="stMargin">&ndash;</div></div>
+  <div class="card"><div class="label">Tx Sent</div><div class="value mono" id="stTx">0</div></div>
+</div>
+
+<div class="panel">
+  <h2>Market Selector &mdash; full production universe</h2>
+  <div class="pillbar groups">
+    <span class="pill groupbtn" data-group="crypto">All Crypto</span>
+    <span class="pill groupbtn" data-group="stocks">All Stocks</span>
+    <span class="pill groupbtn" data-group="spot">All Spot</span>
+    <span class="pill groupbtn" data-group="clear">Clear</span>
+  </div>
+  <div id="pills"></div>
+</div>
+
+<div class="panel">
+  <h2>Live Markets</h2>
+  <div style="overflow-x:auto">
+  <table>
+    <thead><tr>
+      <th>Symbol</th><th>Type</th><th>Mid</th><th>Our Bid</th><th>Our Ask</th>
+      <th>Pos</th><th>Fills</th><th>Volume</th><th>PnL</th><th></th>
+    </tr></thead>
+    <tbody id="marketRows"><tr><td colspan="10" class="empty">Fleet not started</td></tr></tbody>
+  </table>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Recent Fills</h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Time</th><th>Market</th><th>Side</th><th>Size</th><th>Price</th><th>Notional</th><th>Role</th></tr></thead>
+      <tbody id="fillRows"><tr><td colspan="7" class="empty">No fills yet</td></tr></tbody>
+    </table>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Activity Log</h2>
+    <div class="log mono" id="logBox"><div class="empty">Waiting for events&hellip;</div></div>
+  </div>
+</div>
+
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let universe = [], enabledIds = new Set(), lastSnapshot = null, logInit = false;
+
+const post = (path, body) => fetch(path, {
+  method: "POST", headers: {"Content-Type": "application/json"},
+  body: JSON.stringify(body || {}),
+});
+
+$("btnStart").onclick = () => post("/api/start");
+$("btnPause").onclick = () => {
+  const paused = lastSnapshot && lastSnapshot.stats.paused;
+  post(paused ? "/api/resume" : "/api/pause");
+};
+$("btnStop").onclick = () => { if (confirm("Stop fleet? Cancels all quotes and flattens positions.")) post("/api/stop"); };
+$("btnFlattenAll").onclick = () => { if (confirm("Flatten ALL positions and cancel every order?")) post("/api/flatten", {all: true}); };
+
+document.querySelectorAll(".groupbtn").forEach((el) => {
+  el.onclick = async () => {
+    const group = el.dataset.group;
+    if (group === "clear") {
+      for (const m of universe) if (enabledIds.has(m.market_id)) await post("/api/toggle", {symbol: m.symbol, enabled: false});
+      return;
+    }
+    for (const m of universe) if (m.group === group && !enabledIds.has(m.market_id)) await post("/api/toggle", {symbol: m.symbol, enabled: true});
+  };
+});
+
+function fmtUsd(v, dp = 0) {
+  if (v == null || isNaN(v)) return "\u2013";
+  const sign = v < 0 ? "-" : "";
+  return sign + "$" + Math.abs(v).toLocaleString(undefined, {maximumFractionDigits: dp, minimumFractionDigits: dp});
+}
+function fmtNum(v, dp = 6) {
+  if (v == null || isNaN(v)) return "\u2013";
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: dp});
+}
+function fmtTime(ts) {
+  return new Date(ts * 1000).toTimeString().slice(0, 8);
+}
+function fmtDur(s) {
+  const h = String(Math.floor(s / 3600)).padStart(2, "0");
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const x = String(Math.floor(s % 60)).padStart(2, "0");
+  return `${h}:${m}:${x}`;
+}
+
+function renderPills() {
+  const box = $("pills");
+  const groups = [["crypto", "Crypto Perps"], ["stocks", "Stock / Index / RWA Perps"], ["spot", "Spot USDG"]];
+  let html = "";
+  for (const [g, title] of groups) {
+    const markets = universe.filter((m) => m.group === g);
+    if (!markets.length) continue;
+    html += `<div class="pill-section">${title} (${markets.length})</div><div class="pillbar">`;
+    for (const m of markets) {
+      const on = enabledIds.has(m.market_id) ? " on" : "";
+      html += `<span class="pill${on}" data-sym="${m.symbol}" data-id="${m.market_id}">${on ? "\u2713 " : ""}${m.symbol}</span>`;
+    }
+    html += "</div>";
+  }
+  box.innerHTML = html || '<div class="empty">Discovering markets\u2026</div>';
+  box.querySelectorAll(".pill").forEach((el) => {
+    el.onclick = () => post("/api/toggle", {symbol: el.dataset.sym, enabled: !enabledIds.has(Number(el.dataset.id))});
+  });
+}
+
+function render(snap) {
+  lastSnapshot = snap;
+  const st = snap.stats;
+  universe = snap.universe || universe;
+  enabledIds = new Set(snap.enabled_ids || []);
+
+  const dot = $("dot");
+  dot.className = "dot" + (st.running ? (st.paused ? " paused" : " on") : "");
+  $("liveTxt").textContent = st.running ? (st.paused ? "PAUSED" : "LIVE") : "OFFLINE";
+  $("btnPause").textContent = st.paused ? "Resume" : "Pause";
+  $("fleetCount").textContent = `${st.markets_enabled}/${st.markets_total}`;
+  $("sessionTime").textContent = st.running ? fmtDur(st.session_seconds) : "00:00:00";
+  $("stVolume").textContent = fmtUsd(st.volume_usd, st.volume_usd < 1000 ? 2 : 0);
+  $("stFills").textContent = st.fills;
+  const pnlEl = $("stPnl");
+  pnlEl.textContent = fmtUsd(st.pnl, 2).replace("$", st.pnl >= 0 ? "+$" : "$");
+  pnlEl.className = "value mono " + (st.pnl >= 0 ? "pos" : "neg");
+  $("stOrders").textContent = st.open_orders;
+  $("stMargin").textContent = st.margin_used == null ? "\u2013" : Math.round(st.margin_used * 100) + "%";
+  $("stTx").textContent = st.sent_tx;
+
+  renderPills();
+
+  const rows = snap.markets || [];
+  $("marketRows").innerHTML = rows.length ? rows.map((r) => `
+    <tr>
+      <td class="sym">${r.symbol}</td>
+      <td><span class="tag">${r.type}</span></td>
+      <td class="mono">${fmtNum(r.mid)}</td>
+      <td class="mono">${fmtNum(r.our_bid)}</td>
+      <td class="mono">${fmtNum(r.our_ask)}</td>
+      <td class="mono ${r.position > 0 ? "pos-txt" : r.position < 0 ? "neg-txt" : "muted"}">${r.position ? (r.position > 0 ? "+" : "") + fmtNum(r.position) : "0"}</td>
+      <td class="mono">${r.fills}</td>
+      <td class="mono">${fmtUsd(r.volume_usd, 0)}</td>
+      <td class="mono ${r.pnl >= 0 ? "pos-txt" : "neg-txt"}">${r.pnl >= 0 ? "+" : ""}${fmtUsd(r.pnl, 2).replace("+", "")}</td>
+      <td><button class="flatbtn danger" onclick="post('/api/flatten',{symbol:'${r.symbol}'})">Flatten</button></td>
+    </tr>`).join("") : '<tr><td colspan="10" class="empty">Fleet not started</td></tr>';
+
+  const fills = snap.fills || [];
+  $("fillRows").innerHTML = fills.length ? fills.slice(0, 20).map((f) => `
+    <tr>
+      <td class="mono muted">${fmtTime(f.ts)}</td>
+      <td class="sym">${f.symbol}</td>
+      <td class="side-${f.side.toLowerCase()}">${f.side}</td>
+      <td class="mono">${fmtNum(f.size)}</td>
+      <td class="mono">${fmtNum(f.price)}</td>
+      <td class="mono">${fmtUsd(f.notional, 2)}</td>
+      <td><span class="tag">${f.role}</span></td>
+    </tr>`).join("") : '<tr><td colspan="7" class="empty">No fills yet</td></tr>';
+}
+
+function appendEvents(events) {
+  if (!events || !events.length) return;
+  const box = $("logBox");
+  if (!logInit) { box.innerHTML = ""; logInit = true; }
+  const icons = {ok: "\u2713", warn: "\u26a0", err: "\u2717"};
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  for (const e of events) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `<span class="t">${fmtTime(e.ts)}</span><span class="${e.level}">${icons[e.level] || "\u00b7"}</span><span class="${e.level}" style="min-width:44px">${e.tag}</span><span style="min-width:66px;font-weight:600">${e.symbol || ""}</span><span class="msg">${e.message}</span>`;
+    box.appendChild(row);
+  }
+  while (box.children.length > 400) box.removeChild(box.firstChild);
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+// ── live stream with polling fallback ──────────────────────────────────────
+let ws = null, pollTimer = null;
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/api/stream`);
+  ws.onopen = () => { $("connBadge").textContent = "stream connected"; $("connBadge").className = "hmeta conn-badge"; clearInterval(pollTimer); };
+  ws.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+    if (d.snapshot) render(d.snapshot);
+    appendEvents(d.events);
+  };
+  ws.onclose = () => {
+    $("connBadge").textContent = "stream lost \u2014 polling"; $("connBadge").className = "hmeta conn-badge err";
+    pollTimer = setInterval(async () => {
+      try { render(await (await fetch("/api/status")).json()); } catch {}
+    }, 2000);
+    setTimeout(connect, 3000);
+  };
+}
+fetch("/api/status").then((r) => r.json()).then(render).catch(() => {});
+connect();
+</script>
+</body>
+</html>

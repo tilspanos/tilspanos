@@ -1,0 +1,55 @@
+# Per-market MM presets. Any symbol not listed inherits `defaults`.
+# spread_bps: half-spread from mid, in basis points
+# requote_bps: drift threshold before an order is repriced
+# order_size_usd: target notional per side (>= $10 USDG venue minimum)
+# leverage: informational cap used for sizing sanity checks
+# refresh_ms: tick cadence for the market worker
+
+defaults:
+  spread_bps: 0.15      # Breads default
+  requote_bps: 0.02     # Breads default
+  order_size_usd: 25
+  leverage: 5
+  refresh_ms: 12000     # Breads default
+
+crypto_majors:  # tighter spread, larger size
+  BTC: {spread_bps: 0.12, order_size_usd: 50, leverage: 5}
+  ETH: {spread_bps: 0.12, order_size_usd: 50, leverage: 5}
+  SOL: {spread_bps: 0.15, order_size_usd: 30, leverage: 5}
+
+crypto_mid:
+  LIT:  {spread_bps: 0.20, order_size_usd: 25, leverage: 3}
+  HYPE: {spread_bps: 0.18, order_size_usd: 25, leverage: 3}
+  XRP:  {spread_bps: 0.15, order_size_usd: 25, leverage: 5}
+  ZEC:  {spread_bps: 0.20, order_size_usd: 25, leverage: 3}
+  NEAR: {spread_bps: 0.20, order_size_usd: 25, leverage: 3}
+  SUI:  {spread_bps: 0.20, order_size_usd: 25, leverage: 3}
+  VVV:  {spread_bps: 0.30, order_size_usd: 15, leverage: 2}
+
+stocks:  # wider — thin RH book, RWA vol
+  TSLA: {spread_bps: 0.25, order_size_usd: 25, leverage: 3}
+  NVDA: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  SPY:  {spread_bps: 0.18, order_size_usd: 30, leverage: 3}
+  QQQ:  {spread_bps: 0.18, order_size_usd: 30, leverage: 3}
+  AAPL: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  MSFT: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  GOOGL: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  AMZN: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  META: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  AMD:  {spread_bps: 0.25, order_size_usd: 25, leverage: 3}
+
+memes_preipo:  # wide, small, low leverage
+  CASHCAT:   {spread_bps: 0.50, order_size_usd: 10, leverage: 2}
+  ANTHROPIC: {spread_bps: 0.40, order_size_usd: 15, leverage: 2}
+  ANSEM:     {spread_bps: 0.50, order_size_usd: 10, leverage: 2}
+  SKHY:      {spread_bps: 0.50, order_size_usd: 10, leverage: 2}
+  SPCX:      {spread_bps: 0.40, order_size_usd: 15, leverage: 2}
+  CRWV:      {spread_bps: 0.40, order_size_usd: 15, leverage: 2}
+
+spot:  # if user enables spot markets
+  "ETH/USDG":  {spread_bps: 0.15, order_size_usd: 25}
+  "AAPL/USDG": {spread_bps: 0.22, order_size_usd: 25}
+  "NVDA/USDG": {spread_bps: 0.22, order_size_usd: 25}
+  "TSLA/USDG": {spread_bps: 0.25, order_size_usd: 25}
+  "SPY/USDG":  {spread_bps: 0.18, order_size_usd: 30}
+  "QQQ/USDG":  {spread_bps: 0.18, order_size_usd: 30}

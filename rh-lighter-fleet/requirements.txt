@@ -1,0 +1,4 @@
+lighter-sdk>=1.1.2
+aiohttp>=3.9
+PyYAML>=6.0
+python-dotenv>=1.0
