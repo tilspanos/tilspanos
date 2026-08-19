@@ -70,6 +70,10 @@ python bot.py fleet flatten-all   # cancel everything + close all positions
   (volume routed, fills, spread PnL, open orders, margin), live market table,
   recent fills, color-coded activity log, and Start / Pause / Stop /
   Flatten-All controls. Live via WebSocket with polling fallback.
+  The **Fleet Settings** panel edits order size, spread, requote threshold,
+  refresh cadence, leverage, max markets, and the daily loss halt **live** —
+  no restart or `.env` edit needed (leverage is pushed to the venue on perps
+  when trading). `.env` and `configs/market_presets.yaml` set the defaults.
 
 ## Layout
 

@@ -10,6 +10,7 @@ Endpoints:
   POST /api/stop       stop the fleet (cancels + flattens)
   POST /api/flatten    {"symbol": "ETH"} one market, or {"all": true}
   POST /api/toggle     {"symbol": "ETH", "enabled": true}
+  POST /api/config     live fleet settings {"order_size_usd", "spread_bps", ...}
   WS   /api/stream     1s snapshots + live activity events
 """
 
@@ -95,6 +96,14 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
         await fleet.set_market_enabled(body["symbol"], bool(body.get("enabled", True)))
         return web.json_response({"ok": True})
 
+    async def config(request: web.Request) -> web.Response:
+        body = await request.json()
+        try:
+            effective = await fleet.apply_settings(body)
+        except (ValueError, TypeError) as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        return web.json_response({"ok": True, "config": effective})
+
     async def stream(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
@@ -127,6 +136,7 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
     app.router.add_post("/api/stop", stop)
     app.router.add_post("/api/flatten", flatten)
     app.router.add_post("/api/toggle", toggle)
+    app.router.add_post("/api/config", config)
     app.router.add_get("/api/stream", stream)
     return app
 

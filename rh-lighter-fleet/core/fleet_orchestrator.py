@@ -169,6 +169,10 @@ class FleetOrchestrator:
     async def _worker_loop(self, worker: MarketWorker) -> None:
         # Jitter startup so 20+ workers don't sign in lockstep.
         await asyncio.sleep(random.uniform(0, min(2.0, worker.refresh_ms / 1000)))
+        try:
+            await self.execution.set_leverage(worker.market, worker.leverage)
+        except ExecutionError as exc:
+            activity.warn("CTRL", worker.market.symbol, f"leverage init failed: {exc} — quoting anyway")
         while self.running:
             try:
                 await worker.tick(self.paused)
@@ -332,6 +336,84 @@ class FleetOrchestrator:
         if isinstance(stats, dict):
             self.risk.on_account_stats(stats)
 
+    # ── live settings (dashboard "Fleet Settings" panel) ─────────────────────
+    def config_dict(self) -> dict:
+        return {
+            "order_size_usd": self.cfg.order_size_usd,
+            "spread_bps": self.cfg.spread_bps,
+            "requote_bps": self.cfg.requote_bps,
+            "refresh_ms": self.cfg.refresh_ms,
+            "leverage": self.cfg.leverage,
+            "max_concurrent_markets": self.cfg.max_concurrent_markets,
+            "daily_loss_usd": self.cfg.daily_loss_usd,
+        }
+
+    async def apply_settings(self, settings: dict) -> dict:
+        """Apply dashboard settings live to the fleet config and every enabled
+        worker. Overrides per-market presets until restart. Returns the
+        effective config."""
+        cfg = self.cfg
+
+        def _num(key, lo, hi, cast=float):
+            if key not in settings or settings[key] in (None, ""):
+                return None
+            value = cast(settings[key])
+            if not (lo <= value <= hi):
+                raise ValueError(f"{key} must be between {lo} and {hi}")
+            return value
+
+        order_size = _num("order_size_usd", 10, 100_000)
+        spread = _num("spread_bps", 0.01, 500)
+        requote = _num("requote_bps", 0.0, 100)
+        refresh = _num("refresh_ms", 1_000, 300_000, int)
+        leverage = _num("leverage", 1, 50, int)
+        max_markets = _num("max_concurrent_markets", 1, 200, int)
+        daily_loss = _num("daily_loss_usd", 1, 1_000_000)
+
+        if order_size is not None:
+            cfg.order_size_usd = order_size
+        if spread is not None:
+            cfg.spread_bps = spread
+        if requote is not None:
+            cfg.requote_bps = requote
+        if refresh is not None:
+            cfg.refresh_ms = refresh
+        if leverage is not None:
+            cfg.leverage = leverage
+        if max_markets is not None:
+            cfg.max_concurrent_markets = max_markets
+        if daily_loss is not None:
+            cfg.daily_loss_usd = daily_loss
+            self.risk.daily_loss_usd = daily_loss
+
+        changed = []
+        for worker in self.workers.values():
+            if order_size is not None:
+                worker.order_size_usd = order_size
+            if spread is not None:
+                worker.spread_bps = spread
+            if requote is not None:
+                worker.requote_bps = requote
+            if refresh is not None:
+                worker.refresh_ms = refresh
+            if leverage is not None and worker.leverage != leverage:
+                worker.leverage = leverage
+                changed.append(worker)
+
+        # Push leverage to the venue only when actually trading.
+        if changed and self.running and not self.view_only and self.execution:
+            for worker in changed:
+                if not worker.enabled:
+                    continue
+                try:
+                    await self.execution.set_leverage(worker.market, cfg.leverage)
+                except ExecutionError as exc:
+                    activity.err("CTRL", worker.market.symbol, f"leverage update failed: {exc}")
+
+        applied = ", ".join(f"{k}={v}" for k, v in self.config_dict().items())
+        activity.ok("CTRL", "", f"settings applied: {applied}")
+        return self.config_dict()
+
     # ── dashboard state ──────────────────────────────────────────────────────
     def stats(self) -> dict:
         workers = list(self.workers.values())
@@ -378,6 +460,7 @@ class FleetOrchestrator:
         fills.sort(key=lambda f: -f["ts"])
         return {
             "stats": self.stats(),
+            "config": self.config_dict(),
             "markets": rows,
             "fills": fills[:50],
             "universe": [m.as_dict() for m in self.registry.all],

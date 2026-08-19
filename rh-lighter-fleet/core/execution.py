@@ -231,6 +231,24 @@ class ExecutionEngine:
         self._sent()
         self._handle_resp(market, "modify", resp, err)
 
+    async def set_leverage(self, market: Market, leverage: int) -> None:
+        """Set cross-margin leverage for a perp market (no-op for spot)."""
+        if market.market_type != "perp":
+            return
+        await self._pre_send()
+        key = self.pool.key_for_market(market.market_id)
+        async with self.pool.lock_for_key(key):
+            tx, resp, err = await self.client.update_leverage(
+                market_index=market.market_id,
+                margin_mode=self.client.CROSS_MARGIN_MODE,
+                leverage=int(leverage),
+                api_key_index=key,
+            )
+        self._sent()
+        if err is not None:
+            raise ExecutionError(_extract_code(str(err)), f"update_leverage: {err}")
+        activity.ok("SEND", market.symbol, f"leverage set to {leverage}x (cross)")
+
     async def cancel_all(self, market_id: int | None = None) -> None:
         """Cancel everything (optionally scoped to one market) — used by
         flatten and the order-cap sweep."""
