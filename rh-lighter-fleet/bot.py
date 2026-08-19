@@ -3,6 +3,7 @@
 
     python bot.py fleet prove         # Phase-0 production proof (BTC+ETH+LIT)
     python bot.py fleet start         # start fleet + dashboard (foreground)
+    python bot.py fleet dashboard     # VIEW-ONLY dashboard, no API keys needed
     python bot.py fleet status        # snapshot from the running fleet
     python bot.py fleet stop          # stop the running fleet (flattens)
     python bot.py fleet flatten SYM   # instant-close one market
@@ -56,6 +57,29 @@ async def cmd_start() -> int:
     finally:
         activity.warn("CTRL", "", "shutting down — flattening fleet")
         await fleet.stop(flatten=True)
+        await runner.cleanup()
+    return 0
+
+
+async def cmd_dashboard() -> int:
+    """View-only dashboard: full market universe + live production market data,
+    no API keys required, no orders possible. Great for checking the UI."""
+    cfg = load_config(require_keys=False)
+    from core.fleet_orchestrator import FleetOrchestrator
+    from web.server import run_dashboard
+
+    fleet = FleetOrchestrator(cfg)
+    await fleet.registry.refresh()
+    await fleet.start_view_only()
+    runner = await run_dashboard(fleet, cfg.dashboard_host, cfg.dashboard_port)
+    print(f"\nView-only dashboard: http://{cfg.dashboard_host}:{cfg.dashboard_port}  (Ctrl-C to exit)")
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        await fleet.hub.stop()
         await runner.cleanup()
     return 0
 
@@ -167,7 +191,7 @@ def main() -> int:
     fleet = sub.add_parser("fleet", help="fleet operations")
     fleet.add_argument(
         "command",
-        choices=["prove", "start", "stop", "status", "flatten", "flatten-all"],
+        choices=["prove", "start", "dashboard", "stop", "status", "flatten", "flatten-all"],
     )
     fleet.add_argument("symbol", nargs="?", help="market symbol for `flatten`")
     args = parser.parse_args()
@@ -177,6 +201,8 @@ def main() -> int:
         return asyncio.run(prove_main())
     if args.command == "start":
         return asyncio.run(cmd_start())
+    if args.command == "dashboard":
+        return asyncio.run(cmd_dashboard())
     if args.command == "status":
         return cmd_status()
     if args.command == "stop":

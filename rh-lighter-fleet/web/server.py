@@ -45,7 +45,21 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
             }
         )
 
+    def _view_only_block() -> web.Response | None:
+        if fleet.view_only:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error": "view-only mode — set L1_ADDRESS + API_PRIVATE_KEY in .env "
+                    "and run `python bot.py fleet start` to trade",
+                },
+                status=409,
+            )
+        return None
+
     async def start(_request: web.Request) -> web.Response:
+        if (blocked := _view_only_block()) is not None:
+            return blocked
         if not fleet.running:
             asyncio.create_task(fleet.start())
         else:
@@ -61,10 +75,14 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
         return web.json_response({"ok": True})
 
     async def stop(_request: web.Request) -> web.Response:
+        if (blocked := _view_only_block()) is not None:
+            return blocked
         asyncio.create_task(fleet.stop(flatten=True))
         return web.json_response({"ok": True})
 
     async def flatten(request: web.Request) -> web.Response:
+        if (blocked := _view_only_block()) is not None:
+            return blocked
         body = await request.json()
         if body.get("all"):
             await fleet.flatten_all()

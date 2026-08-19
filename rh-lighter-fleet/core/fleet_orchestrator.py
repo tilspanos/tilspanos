@@ -59,6 +59,7 @@ class FleetOrchestrator:
         self.enabled_market_ids: set[int] = set()
         self.running = False
         self.paused = False
+        self.view_only = False  # dashboard preview: live market data, no signing keys
         self.session_start: float = 0.0
         self._tasks: dict[str, asyncio.Task] = {}
         self._worker_tasks: dict[int, asyncio.Task] = {}
@@ -102,6 +103,22 @@ class FleetOrchestrator:
             order_size_usd=float(p.get("order_size_usd", self.cfg.order_size_usd)),
             leverage=int(p.get("leverage", self.cfg.leverage)),
             refresh_ms=int(p.get("refresh_ms", self.cfg.refresh_ms)),
+        )
+
+    async def start_view_only(self) -> None:
+        """Dashboard preview: live production market data for the configured
+        groups, no keys, no orders. Used by `python bot.py fleet dashboard`."""
+        self.view_only = True
+        if not self.registry.markets:
+            await self.registry.refresh()
+        for market in self._select_markets():
+            self.workers[market.market_id] = self._build_worker(market)
+            self.enabled_market_ids.add(market.market_id)
+        await self.hub.start_market_data(sorted(self.enabled_market_ids))
+        activity.ok(
+            "BOOT", "",
+            f"VIEW-ONLY dashboard: {len(self.registry.all)} markets discovered, "
+            f"streaming {len(self.enabled_market_ids)} — add API keys to trade",
         )
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -237,8 +254,9 @@ class FleetOrchestrator:
                 self.workers[mid] = self._build_worker(market)
             self.workers[mid].enabled = True
             self.enabled_market_ids.add(mid)
-            if self.running:
+            if self.running or self.view_only:
                 await self.hub.add_market(mid)
+            if self.running:
                 self._spawn_worker_loop(mid)
             activity.ok("CTRL", market.symbol, "market enabled")
         else:
@@ -326,6 +344,7 @@ class FleetOrchestrator:
         return {
             "running": self.running,
             "paused": self.paused,
+            "view_only": self.view_only,
             "session_start": self.session_start,
             "session_seconds": int(time.time() - self.session_start) if self.session_start else 0,
             "markets_enabled": len(self.active_workers()),
@@ -340,7 +359,7 @@ class FleetOrchestrator:
         }
 
     def snapshot(self) -> dict:
-        rows = [w.status_row() for w in self.workers.values()]
+        rows = [w.status_row() for w in self.workers.values() if w.enabled]
         rows.sort(key=lambda r: r["market_id"])
         fills = []
         for w in self.workers.values():

@@ -193,10 +193,17 @@ tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
 const $ = (id) => document.getElementById(id);
 let universe = [], enabledIds = new Set(), lastSnapshot = null, logInit = false;
 
-const post = (path, body) => fetch(path, {
-  method: "POST", headers: {"Content-Type": "application/json"},
-  body: JSON.stringify(body || {}),
-});
+const post = async (path, body) => {
+  const resp = await fetch(path, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body || {}),
+  });
+  if (!resp.ok) {
+    const d = await resp.json().catch(() => ({}));
+    if (d.error) alert(d.error);
+  }
+  return resp;
+};
 
 $("btnStart").onclick = () => post("/api/start");
 $("btnPause").onclick = () => {
@@ -263,8 +270,9 @@ function render(snap) {
   enabledIds = new Set(snap.enabled_ids || []);
 
   const dot = $("dot");
-  dot.className = "dot" + (st.running ? (st.paused ? " paused" : " on") : "");
-  $("liveTxt").textContent = st.running ? (st.paused ? "PAUSED" : "LIVE") : "OFFLINE";
+  dot.className = "dot" + (st.running ? (st.paused ? " paused" : " on") : (st.view_only ? " paused" : ""));
+  $("liveTxt").textContent = st.running ? (st.paused ? "PAUSED" : "LIVE")
+    : (st.view_only ? "VIEW ONLY" : "OFFLINE");
   $("btnPause").textContent = st.paused ? "Resume" : "Pause";
   $("fleetCount").textContent = `${st.markets_enabled}/${st.markets_total}`;
   $("sessionTime").textContent = st.running ? fmtDur(st.session_seconds) : "00:00:00";

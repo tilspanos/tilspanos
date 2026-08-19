@@ -15,6 +15,10 @@ cd rh-lighter-fleet
 pip install -r requirements.txt
 cp .env.example .env        # fill in L1_ADDRESS, API_KEY_INDEX (>=4), API_PRIVATE_KEY
 
+# Just want to see the dashboard? View-only mode needs NO keys:
+# full universe + live production market data, orders disabled.
+python bot.py fleet dashboard      # → http://127.0.0.1:8899
+
 # Phase 0 — prove real production order flow (BTC+ETH+LIT open/cancel,
 # ETH $10 market fill, SOL sendTxBatch). Must exit 0 before running the fleet.
 python bot.py fleet prove
@@ -28,6 +32,7 @@ python bot.py fleet start
 ```
 python bot.py fleet prove         # Phase-0 production proof gate
 python bot.py fleet start         # fleet + dashboard, foreground
+python bot.py fleet dashboard     # view-only dashboard, no API keys needed
 python bot.py fleet status        # live snapshot of the running fleet
 python bot.py fleet stop          # stop (cancels quotes, flattens positions)
 python bot.py fleet flatten ETH   # instant-close one market

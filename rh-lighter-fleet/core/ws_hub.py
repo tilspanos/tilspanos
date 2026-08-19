@@ -113,6 +113,7 @@ class WsConnection:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._task: asyncio.Task | None = None
         self.reconnect_count = 0
+        self._readonly_fallback = False
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -147,12 +148,18 @@ class WsConnection:
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
 
+    def _url(self) -> str:
+        url = self.hub.url
+        if self._readonly_fallback and "readonly=true" not in url:
+            url += ("&" if "?" in url else "?") + "readonly=true"
+        return url
+
     async def _run(self) -> None:
         delay = RECONNECT_BASE_DELAY_S
         while True:
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.ws_connect(self.hub.url, heartbeat=PING_INTERVAL_S) as ws:
+                    async with session.ws_connect(self._url(), heartbeat=PING_INTERVAL_S) as ws:
                         self._ws = ws
                         self.connected = True
                         self.last_msg_ts = time.time()
@@ -172,6 +179,19 @@ class WsConnection:
                             ping_task.cancel()
             except asyncio.CancelledError:
                 raise
+            except aiohttp.WSServerHandshakeError as exc:
+                # Venue-restricted regions reject the trading stream; the
+                # read-only stream still serves market data (no tx over WS).
+                if not self._readonly_fallback:
+                    self._readonly_fallback = True
+                    reason = "region restricted" if exc.status in (400, 403) else f"status {exc.status}"
+                    activity.warn(
+                        "WS", "",
+                        f"{self.name} handshake rejected ({reason}) — "
+                        "falling back to read-only stream",
+                    )
+                else:
+                    activity.warn("WS", "", f"{self.name} handshake error: {exc}")
             except Exception as exc:
                 activity.warn("WS", "", f"{self.name} error: {type(exc).__name__}: {exc}")
             self.connected = False
