@@ -111,10 +111,22 @@ def load_config(require_keys: bool = True) -> FleetConfig:
         )
 
     l1_address = os.environ.get("L1_ADDRESS", "").strip()
+    if l1_address.lower() == "0xyourwallet":
+        raise SystemExit(
+            "FATAL: L1_ADDRESS still holds the placeholder from .env.example — "
+            "replace it with your real wallet address."
+        )
 
     keys: list[KeySlot] = []
     base_idx = os.environ.get("API_KEY_INDEX")
     base_key = os.environ.get("API_PRIVATE_KEY", "").strip()
+    public_key = os.environ.get("API_PUBLIC_KEY", "").strip()
+    if base_key and public_key and base_key.lower() == public_key.lower():
+        raise SystemExit(
+            "FATAL: API_PRIVATE_KEY and API_PUBLIC_KEY are identical — you "
+            "pasted the public key into the private key slot. The bot signs "
+            "with the PRIVATE key; copy it from Lighter's key creation screen."
+        )
     if base_idx and base_key:
         keys.append(KeySlot(int(base_idx), base_key))
     # Optional extra keys: API_KEY_INDEX_1/API_PRIVATE_KEY_1, _2, ... _15
