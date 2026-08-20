@@ -1,0 +1,28 @@
+# Per-market MM presets. Any symbol not listed inherits `defaults`.
+defaults:
+  spread_bps: 0.15
+  requote_bps: 0.25
+  order_size_usd: 25
+  leverage: 5
+  refresh_ms: 12000
+  min_edge_bps: 0.5
+  vol_breaker_bps: 2.5
+  inventory_mult: 3.0
+
+crypto:
+  BTC-USD: {spread_bps: 0.12, order_size_usd: 50, leverage: 5}
+  ETH-USD: {spread_bps: 0.12, order_size_usd: 50, leverage: 5}
+  SOL-USD: {spread_bps: 0.15, order_size_usd: 30, leverage: 5}
+
+equities:
+  NVDA-USD: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  TSLA-USD: {spread_bps: 0.25, order_size_usd: 25, leverage: 3}
+  HOOD-USD: {spread_bps: 0.25, order_size_usd: 25, leverage: 3}
+  AAPL-USD: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+
+commodities:
+  GLD-USD: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+
+indices:
+  SPY-USD: {spread_bps: 0.18, order_size_usd: 30, leverage: 3}
+  QQQ-USD: {spread_bps: 0.18, order_size_usd: 30, leverage: 3}
