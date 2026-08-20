@@ -33,7 +33,8 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
     app["fleet"] = fleet
 
     async def index(_request: web.Request) -> web.FileResponse:
-        return web.FileResponse(INDEX_PATH)
+        # no-store: browsers must always fetch the current dashboard code
+        return web.FileResponse(INDEX_PATH, headers={"Cache-Control": "no-store"})
 
     async def status(_request: web.Request) -> web.Response:
         return web.json_response(fleet.snapshot())
@@ -143,7 +144,8 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
 
 async def run_dashboard(fleet: FleetOrchestrator, host: str, port: int) -> web.AppRunner:
     app = build_app(fleet)
-    runner = web.AppRunner(app)
+    # No HTTP access log: it drowns the trading activity log in the terminal.
+    runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host, port)
     await site.start()

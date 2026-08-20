@@ -395,22 +395,36 @@ function appendEvents(events) {
 }
 
 // ── live stream with polling fallback ──────────────────────────────────────
-let ws = null, pollTimer = null;
+let ws = null, pollTimer = null, reconnectPending = false, reconnectDelay = 3000;
+function startPolling() {
+  if (pollTimer) return; // never stack intervals
+  pollTimer = setInterval(async () => {
+    try { render(await (await fetch("/api/status")).json()); } catch {}
+  }, 3000);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/api/stream`);
-  ws.onopen = () => { $("connBadge").textContent = "stream connected"; $("connBadge").className = "hmeta conn-badge"; clearInterval(pollTimer); };
+  ws.onopen = () => {
+    $("connBadge").textContent = "stream connected"; $("connBadge").className = "hmeta conn-badge";
+    stopPolling(); reconnectDelay = 3000;
+  };
   ws.onmessage = (ev) => {
     const d = JSON.parse(ev.data);
     if (d.snapshot) render(d.snapshot);
     appendEvents(d.events);
   };
+  ws.onerror = () => { try { ws.close(); } catch {} };
   ws.onclose = () => {
     $("connBadge").textContent = "stream lost \u2014 polling"; $("connBadge").className = "hmeta conn-badge err";
-    pollTimer = setInterval(async () => {
-      try { render(await (await fetch("/api/status")).json()); } catch {}
-    }, 2000);
-    setTimeout(connect, 3000);
+    startPolling();
+    if (reconnectPending) return; // one reconnect attempt in flight at a time
+    reconnectPending = true;
+    setTimeout(() => { reconnectPending = false; connect(); }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
   };
 }
 fetch("/api/status").then((r) => r.json()).then(render).catch(() => {});
