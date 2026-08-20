@@ -543,7 +543,21 @@ class FleetOrchestrator:
                 if self.risk.collateral is not None and self.start_collateral is not None
                 else None
             ),
-        }
+        } | self._cost_metrics(workers)
+
+    def _cost_metrics(self, workers) -> dict:
+        """Cost per $1M routed — THE efficiency metric for this bot.
+        Positive = you pay to route volume; negative = you get paid."""
+        volume = sum(w.volume_usd for w in workers)
+        net = (
+            self.risk.collateral - self.start_collateral
+            if self.risk.collateral is not None and self.start_collateral is not None
+            else None
+        )
+        cost = None
+        if net is not None and volume >= 100:  # need some volume for a meaningful ratio
+            cost = round(-net / volume * 1_000_000, 2)
+        return {"cost_per_million": cost}
 
     def snapshot(self) -> dict:
         rows = [w.status_row() for w in self.workers.values() if w.enabled]

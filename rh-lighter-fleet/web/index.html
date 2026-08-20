@@ -153,6 +153,7 @@ tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
 
 <div class="cards">
   <div class="card"><div class="label">Net PnL &mdash; Venue, Session</div><div class="value mono" id="stNet">&ndash;</div></div>
+  <div class="card"><div class="label">Cost per $1M Routed</div><div class="value mono" id="stCost">&ndash;</div></div>
   <div class="card"><div class="label">Balance (USDG)</div><div class="value mono" id="stBalance">&ndash;</div></div>
   <div class="card"><div class="label">Volume Routed</div><div class="value mono" id="stVolume">$0</div></div>
   <div class="card"><div class="label">Fills</div><div class="value mono" id="stFills">0</div></div>
@@ -200,9 +201,9 @@ tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
   <table>
     <thead><tr>
       <th>Symbol</th><th>Type</th><th>Mid</th><th>Our Bid</th><th>Our Ask</th>
-      <th>Pos</th><th>Fills</th><th>Volume</th><th>PnL</th><th></th>
+      <th>Pos</th><th>Fills</th><th>Volume</th><th>PnL</th><th>Cost/1M</th><th></th>
     </tr></thead>
-    <tbody id="marketRows"><tr><td colspan="10" class="empty">Fleet not started</td></tr></tbody>
+    <tbody id="marketRows"><tr><td colspan="11" class="empty">Fleet not started</td></tr></tbody>
   </table>
   </div>
 </div>
@@ -359,6 +360,14 @@ function render(snap) {
     netEl.textContent = (st.net_pnl >= 0 ? "+" : "") + fmtUsd(st.net_pnl, 2).replace("+", "");
     netEl.className = "value mono " + (st.net_pnl >= 0 ? "pos" : "neg");
   }
+  const costEl = $("stCost");
+  if (st.cost_per_million == null) {
+    costEl.textContent = "\u2013"; costEl.className = "value mono";
+  } else {
+    // positive = you PAY per $1M routed (red); negative = you EARN (green)
+    costEl.textContent = fmtUsd(st.cost_per_million, 0) + "/M";
+    costEl.className = "value mono " + (st.cost_per_million <= 0 ? "pos" : "neg");
+  }
 
   renderPills();
 
@@ -374,8 +383,9 @@ function render(snap) {
       <td class="mono">${r.fills}</td>
       <td class="mono">${fmtUsd(r.volume_usd, 0)}</td>
       <td class="mono ${r.pnl >= 0 ? "pos-txt" : "neg-txt"}">${r.pnl >= 0 ? "+" : ""}${fmtUsd(r.pnl, 2).replace("+", "")}</td>
+      <td class="mono ${r.cost_per_million == null ? "muted" : (r.cost_per_million <= 0 ? "pos-txt" : "neg-txt")}">${r.cost_per_million == null ? "\u2013" : fmtUsd(r.cost_per_million, 0)}</td>
       <td><button class="flatbtn danger" onclick="post('/api/flatten',{symbol:'${r.symbol}'})">Flatten</button></td>
-    </tr>`).join("") : '<tr><td colspan="10" class="empty">Fleet not started</td></tr>';
+    </tr>`).join("") : '<tr><td colspan="11" class="empty">Fleet not started</td></tr>';
 
   const fills = snap.fills || [];
   $("fillRows").innerHTML = fills.length ? fills.slice(0, 20).map((f) => `

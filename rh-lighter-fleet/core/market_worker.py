@@ -132,6 +132,11 @@ class MarketWorker:
             "fills": self.fill_count,
             "volume_usd": round(self.volume_usd, 2),
             "pnl": round(self.realized_pnl + self.position.unrealized_pnl, 4),
+            "cost_per_million": (
+                round(-(self.realized_pnl + self.position.unrealized_pnl) / self.volume_usd * 1_000_000, 2)
+                if self.volume_usd >= 50
+                else None
+            ),
             "book_age_ms": None if not self.book else min(self.book.age_ms, 10**9),
         }
 
