@@ -111,6 +111,7 @@ class FleetOrchestrator:
             market_loss_usd=float(p.get("market_loss_usd", self.cfg.market_loss_usd)),
             min_edge_bps=float(p.get("min_edge_bps", 0.5)),
             vol_breaker_bps=float(p.get("vol_breaker_bps", 2.5)),
+            inventory_mult=float(p.get("inventory_mult", 3.0)),
         )
         worker.account_index = self.cfg.account_index
         return worker

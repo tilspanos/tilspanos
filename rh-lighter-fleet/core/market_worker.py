@@ -63,6 +63,7 @@ class MarketWorker:
         vol_mult: float = 0.5,
         min_edge_bps: float = 0.5,
         vol_breaker_bps: float = 2.5,
+        inventory_mult: float = 3.0,
     ) -> None:
         self.market = market
         self.hub = hub
@@ -78,6 +79,7 @@ class MarketWorker:
         self.vol_mult = vol_mult
         self.min_edge_bps = min_edge_bps
         self.vol_breaker_bps = vol_breaker_bps
+        self.inventory_mult = inventory_mult  # max inventory as a multiple of order size
 
         self.enabled = True
         self.orders: dict[str, OrderState | None] = {"bid": None, "ask": None}
@@ -98,6 +100,7 @@ class MarketWorker:
         self._pos_opened_ts: float | None = None
         self._last_mid: float | None = None
         self._vol_bps: float = 0.0  # EWMA of per-tick |mid move| in bps
+        self._mom_bps: float = 0.0  # signed EWMA of per-tick mid moves (momentum)
         self._last_topup_ts: float = 0.0
         # our venue account, used to derive trade side from ask/bid account ids
         self.account_index: int | None = None
@@ -168,18 +171,31 @@ class MarketWorker:
             await self.instant_close_ioc()
             return
 
-        # volatility estimate (EWMA of per-tick |mid move|, in bps)
+        # volatility + momentum estimates (EWMA of per-tick mid moves, in bps)
         if self._last_mid:
-            ret_bps = abs(mid - self._last_mid) / self._last_mid * 10_000
-            self._vol_bps = 0.8 * self._vol_bps + 0.2 * ret_bps
+            ret_bps = (mid - self._last_mid) / self._last_mid * 10_000
+            self._vol_bps = 0.8 * self._vol_bps + 0.2 * abs(ret_bps)
+            self._mom_bps = 0.5 * self._mom_bps + 0.5 * ret_bps
         self._last_mid = mid
 
-        # RULE: never quote both sides while holding a position — work a
-        # passive exit instead (capture the full spread, don't pay it back).
-        if abs(self.position.size) >= m.min_size_step:
-            await self.manage_position()
-            return
-        self._pos_opened_ts = None
+        # ── Inventory backstops (Avellaneda-Stoikov: skewed quotes unload
+        # inventory passively; the taker path exists ONLY for emergencies) ──
+        pos = self.position.size
+        if abs(pos) >= m.min_size_step:
+            now = time.time()
+            if self._pos_opened_ts is None:
+                self._pos_opened_ts = now
+            entry = self.position.avg_entry or mid
+            adverse_bps = ((entry - mid) if pos > 0 else (mid - entry)) / entry * 10_000
+            held_s = now - self._pos_opened_ts
+            if held_s > self.max_hold_s or adverse_bps > self.adverse_stop_bps:
+                reason = "max hold" if held_s > self.max_hold_s else f"adverse {adverse_bps:.1f}bps"
+                activity.warn("CLOSE", m.symbol, f"inventory backstop ({reason}) — taker flatten")
+                await self.cancel_both_sides()
+                await self._taker_flatten()
+                return
+        else:
+            self._pos_opened_ts = None
 
         if fleet_paused:
             return
@@ -213,19 +229,33 @@ class MarketWorker:
         # tick is how MMs get run over (capped at 25x the base spread)
         half_bps = max(self.spread_bps, min(self._vol_bps * self.vol_mult, self.spread_bps * 25))
         half_spread = max(mid * (half_bps / 10_000), min_tick) + extra
-        size_base = self.order_size_usd / mid
+        base_size = self.order_size_usd / mid
 
         # anchor on the microprice: top-of-book size imbalance predicts the
         # next move, so lean quotes toward the pressured side
         anchor = mid
+        imbalance = 0.0  # +1 = all bid-side size (up pressure), -1 = all ask-side
         if bb and ba:
             bid_sz = book.bids.levels.get(bb, 0.0)
             ask_sz = book.asks.levels.get(ba, 0.0)
             if bid_sz > 0 and ask_sz > 0:
                 anchor = (bb * ask_sz + ba * bid_sz) / (bid_sz + ask_sz)
+                imbalance = (bid_sz - ask_sz) / (bid_sz + ask_sz)
 
-        bid_px = anchor - half_spread
-        ask_px = anchor + half_spread
+        # ── Avellaneda-Stoikov reservation price: shift BOTH quotes by
+        # inventory so incoming flow mean-reverts the position for free —
+        # never pay taker to unload (r = S − q·γ·σ²·(T−t), implemented as a
+        # half-spread-proportional skew at full inventory).
+        max_inv_base = max(base_size * self.inventory_mult, m.min_size_step)
+        q_ratio = max(-1.0, min(1.0, pos / max_inv_base))
+        reservation = anchor - q_ratio * half_spread
+        bid_px = reservation - half_spread
+        ask_px = reservation + half_spread
+
+        # sizes: shrink the side that grows inventory, enlarge the side that
+        # unloads it (exit side carries the position on top of base size)
+        bid_size = base_size * (1 - max(q_ratio, 0.0)) + max(-pos, 0.0)
+        ask_size = base_size * (1 - max(-q_ratio, 0.0)) + max(pos, 0.0)
 
         # ── JOIN, never improve: quote AT the best level, not inside the
         # spread. Improving the book means being first in line for informed
@@ -259,24 +289,65 @@ class MarketWorker:
         bid_px = m.round_price(bid_px)
         ask_px = m.round_price(ask_px)
 
-        # Venue minimums: max(min_base_amount, $10 USDG min_quote_amount).
+        # ── Contrarian gate (arXiv 2502.18625, live BTC-perp experiment):
+        # maker fills are most toxic when momentum AND book imbalance both
+        # press into the quote. Skip the side that would be run over;
+        # counter-trading the pressure is where maker strategies profit.
+        gate = 0.5
+        skip_bid = self._mom_bps < -0.3 and imbalance < -gate
+        skip_ask = self._mom_bps > 0.3 and imbalance > gate
+
+        # Venue minimums per side: max(min_base_amount, $10 USDG notional).
         min_quote = max(m.min_quote_amount, MIN_QUOTE_USDG)
-        if bid_px * size_base < min_quote:
-            size_base = min_quote / bid_px * 1.01
-        size_base = max(size_base, m.min_base_amount)
-        size_base = round(size_base, m.size_decimals)
+
+        def _clamp_size(px: float, size: float) -> float:
+            if px * size < min_quote:
+                size = min_quote / px * 1.01
+            return round(max(size, m.min_base_amount), m.size_decimals)
+
+        # At the inventory limit, only the reducing side stays, sized exactly
+        # to the position and flagged reduce-only — no risk may be added.
+        at_limit_long = q_ratio >= 1.0
+        at_limit_short = q_ratio <= -1.0
+        if at_limit_long:
+            ask_size = abs(pos)
+        if at_limit_short:
+            bid_size = abs(pos)
 
         book_line = (
             f"bid={best_bid} ask={best_ask} mid={mid:.6g} "
             f"spread={(best_ask - best_bid) / mid * 10_000:.2f}bps "
-            f"depth=${book.bids.depth_usd():.0f}/${book.asks.depth_usd():.0f}"
+            f"q={q_ratio:+.2f} imb={imbalance:+.2f} mom={self._mom_bps:+.2f}bps"
         )
         activity.ok("BOOK", m.symbol, book_line)
 
-        await self.evaluate_side("bid", bid_px, size_base)
-        await self.evaluate_side("ask", ask_px, size_base)
+        if skip_bid or at_limit_long:
+            if skip_bid:
+                self.exec.record_veto(f"{m.symbol}: bid gated (mom {self._mom_bps:+.2f}, imb {imbalance:+.2f})")
+            await self._cancel_side("bid")
+        else:
+            await self.evaluate_side(
+                "bid", bid_px, _clamp_size(bid_px, bid_size), reduce_only=at_limit_short
+            )
+        if skip_ask or at_limit_short:
+            if skip_ask:
+                self.exec.record_veto(f"{m.symbol}: ask gated (mom {self._mom_bps:+.2f}, imb {imbalance:+.2f})")
+            await self._cancel_side("ask")
+        else:
+            await self.evaluate_side(
+                "ask", ask_px, _clamp_size(ask_px, ask_size), reduce_only=at_limit_long
+            )
 
-    async def evaluate_side(self, side: str, desired_px: float, size_base: float) -> None:
+    async def _cancel_side(self, side: str) -> None:
+        order = self.orders[side]
+        if order is not None and order.order_index is not None and order.status in ("pending", "open"):
+            try:
+                await self.exec.cancel(self.market, order.order_index)
+            except ExecutionError:
+                pass
+        self.orders[side] = None
+
+    async def evaluate_side(self, side: str, desired_px: float, size_base: float, reduce_only: bool = False) -> None:
         m = self.market
         existing = self.orders[side]
         if existing and existing.status in ("pending", "open"):
@@ -298,7 +369,8 @@ class MarketWorker:
 
         try:
             coi = await self.exec.place_post_only(
-                m, is_ask=(side == "ask"), price=desired_px, size_base=size_base
+                m, is_ask=(side == "ask"), price=desired_px, size_base=size_base,
+                reduce_only=reduce_only,
             )
         except ExecutionError as exc:
             self._on_exec_error(side, exc)
@@ -330,32 +402,24 @@ class MarketWorker:
         elif exc.code == 21718:
             activity.warn("ORDER", m.symbol, "MaxOrdersPerMarket — sweeping stale orders")
 
-    # ── inventory management (passive exit — the profitability core) ────────
-    async def manage_position(self) -> None:
-        """Holding inventory: rest a reduce-only POST_ONLY on the exit side at
-        entry + spread so the round trip earns the FULL spread. Fall back to a
-        taker IOC only when the position is held too long or moves against us."""
+    # ── emergency taker flatten (backstop only — A-S skew unloads passively) ─
+    async def _taker_flatten(self) -> None:
+        """Close the position with a taker IOC, handling sub-minimum dust:
+        the venue enforces min sizes on market orders too (code=200 then a
+        silent sequencer cancel), so dust is first topped UP with one
+        valid-size IOC to make the position closeable."""
         m = self.market
         pos = self.position.size
         mid = self.mid
-        if mid is None:
+        if mid is None or abs(pos) < m.min_size_step:
             return
         is_long = pos > 0
-        exit_side = "ask" if is_long else "bid"
-        entry_side = "bid" if is_long else "ask"
-
-        # Dust positions (partial fills below the venue minimums) cannot be
-        # closed directly: the venue enforces min sizes on market orders too —
-        # the tx returns code=200 but the sequencer silently cancels it.
-        # Fix: top the position UP with one valid-size IOC so it crosses the
-        # minimum, then the normal exit path closes the whole thing.
         min_limit_size = max(
             m.min_base_amount, max(m.min_quote_amount, MIN_QUOTE_USDG) / mid
         )
         if abs(pos) < min_limit_size:
             # Cooldown: never top-up more than once a minute — if the first
-            # one didn't resolve the dust, wait for position reconciliation
-            # instead of buying again.
+            # one didn't resolve the dust, wait for position reconciliation.
             if time.time() - self._last_topup_ts < 60:
                 return
             self._last_topup_ts = time.time()
@@ -366,7 +430,6 @@ class MarketWorker:
                 f"dust {pos:+.6g} below venue minimum {min_limit_size:.6g} — "
                 f"topping up {topup:.6g} to make it closeable",
             )
-            await self.cancel_both_sides()
             worst = mid * (1.02 if is_long else 0.98)
             try:
                 await self.exec.place_market_ioc(
@@ -378,76 +441,8 @@ class MarketWorker:
                 )
             except ExecutionError as exc:
                 activity.err("CLOSE", m.symbol, f"dust top-up failed: {exc.name}: {exc}")
-            return  # next tick sees a closeable position and exits normally
-
-        now = time.time()
-        if self._pos_opened_ts is None:
-            self._pos_opened_ts = now
-        held_s = now - self._pos_opened_ts
-        entry = self.position.avg_entry or mid
-        adverse_bps = ((entry - mid) if is_long else (mid - entry)) / entry * 10_000
-
-        # hard exits: cap the damage with a taker close
-        if held_s > self.max_hold_s or adverse_bps > self.adverse_stop_bps:
-            reason = "max hold" if held_s > self.max_hold_s else f"adverse {adverse_bps:.1f}bps"
-            activity.warn("CLOSE", m.symbol, f"passive exit abandoned ({reason}) — IOC flatten")
-            await self.cancel_both_sides()
-            await self.instant_close_ioc()
-            return
-
-        # only the exit quote should rest while we hold inventory
-        other = self.orders[entry_side]
-        if other is not None:
-            if other.order_index is not None and other.status in ("pending", "open"):
-                try:
-                    await self.exec.cancel(m, other.order_index)
-                except ExecutionError:
-                    pass
-            self.orders[entry_side] = None
-
-        # exit price: at least entry ± 1 tick (never exit at a loss passively),
-        # ideally entry ± half-spread; clamped so POST_ONLY cannot cross
-        book = self.book
-        half = max(mid * (self.spread_bps / 10_000), m.min_tick)
-        if is_long:
-            px = max(entry + m.min_tick, mid + half)
-            if book and book.best_bid:
-                px = max(px, book.best_bid + m.min_tick)
-        else:
-            px = min(entry - m.min_tick, mid - half)
-            if book and book.best_ask:
-                px = min(px, book.best_ask - m.min_tick)
-        px = m.round_price(px)
-
-        existing = self.orders[exit_side]
-        if existing is not None and existing.status in ("pending", "open"):
-            drift_bps = abs(existing.price - px) / px * 10_000
-            if drift_bps < max(self.requote_bps, 0.5):
-                return  # exit is resting where we want it
-            if existing.order_index is not None:
-                try:
-                    await self.exec.cancel(m, existing.order_index)
-                except ExecutionError:
-                    pass
-            self.orders[exit_side] = None
-            return  # fresh exit goes out next tick
-
-        size = round(abs(pos), m.size_decimals)
-        try:
-            coi = await self.exec.place_post_only(
-                m, is_ask=is_long, price=px, size_base=size, reduce_only=True
-            )
-        except ExecutionError as exc:
-            self._on_exec_error(exit_side, exc)
-            return
-        self.register_order(
-            exit_side,
-            OrderState(client_order_index=coi, price=px, size=size, is_ask=is_long),
-        )
-        activity.ok(
-            "CLOSE", m.symbol,
-            f"passive exit {exit_side} {size:.6g} @ {px} (entry {entry:.6g}, held {held_s:.0f}s)",
-        )
+            return  # next tick sees a closeable position
+        await self.instant_close_ioc()
 
     # ── flatten ──────────────────────────────────────────────────────────────
     async def cancel_both_sides(self) -> None:

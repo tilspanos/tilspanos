@@ -86,7 +86,7 @@ class FleetConfig:
     daily_loss_usd: float = 100.0
     leverage: int = 5
     # inventory management (profitability core)
-    max_hold_s: float = 120.0        # passive exit patience before IOC flatten
+    max_hold_s: float = 300.0        # inventory backstop patience before taker flatten
     adverse_stop_bps: float = 10.0   # IOC flatten if position moves this far against us
     market_loss_usd: float = 10.0    # auto-disable a market after this realized loss
 
@@ -185,7 +185,7 @@ def load_config(require_keys: bool = True) -> FleetConfig:
         max_concurrent_markets=int(os.environ.get("FLEET_MAX_CONCURRENT_MARKETS", "20")),
         daily_loss_usd=float(os.environ.get("FLEET_DAILY_LOSS_USD", "100")),
         leverage=int(os.environ.get("FLEET_LEVERAGE", "5")),
-        max_hold_s=float(os.environ.get("FLEET_MAX_HOLD_S", "120")),
+        max_hold_s=float(os.environ.get("FLEET_MAX_HOLD_S", "300")),
         adverse_stop_bps=float(os.environ.get("FLEET_ADVERSE_STOP_BPS", "10")),
         market_loss_usd=float(os.environ.get("FLEET_MARKET_LOSS_USD", "10")),
         dashboard_host=os.environ.get("DASHBOARD_HOST", "127.0.0.1"),
