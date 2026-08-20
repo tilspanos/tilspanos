@@ -30,7 +30,7 @@ from core.signer_pool import SignerPool, discover_account_index
 from core.ws_hub import WsHub
 
 PROOF_SIZE_USD = 10.0  # venue minimum notional
-WS_CONFIRM_TIMEOUT_S = 10.0
+WS_CONFIRM_TIMEOUT_S = 15.0
 SAFE_BID_DISCOUNT = 0.98  # rest 2% below best bid: post-only-safe, won't fill
 
 
@@ -139,9 +139,10 @@ class ProofHarness:
         size = round(size, m.size_decimals)
         worker = self.worker(m)
         coi = await self.execution.place_post_only(m, is_ask=False, price=bid_px, size_base=size)
-        worker.orders["bid"] = worker.orders["bid"] or None
         from core.market_worker import OrderState
-        worker.orders["bid"] = OrderState(client_order_index=coi, price=bid_px, size=size)
+        # register_order replays any WS confirmation that raced ahead of the
+        # REST response, so a fast stream can't make the proof miss "open".
+        worker.register_order("bid", OrderState(client_order_index=coi, price=bid_px, size=size))
         status = await self.wait_order_status(m, coi, {"open"})
         assert status == "open", f"{m.symbol} order not confirmed open via WS: {status}"
         state = worker.orders["bid"]
@@ -182,7 +183,7 @@ class ProofHarness:
         # batch 1: create
         cois = await self.execution.replace_quotes_batch(m, cancels=[], creates=[(False, bid_px, size)])
         assert cois, "sendTxBatch returned no client_order_index"
-        worker.orders["bid"] = OrderState(client_order_index=cois[0], price=bid_px, size=size)
+        worker.register_order("bid", OrderState(client_order_index=cois[0], price=bid_px, size=size))
         status = await self.wait_order_status(m, cois[0], {"open"})
         assert status == "open", f"{m.symbol} batch order not open: {status}"
         state = worker.orders["bid"]

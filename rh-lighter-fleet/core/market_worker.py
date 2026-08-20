@@ -79,6 +79,9 @@ class MarketWorker:
         self.consecutive_errors = 0
         # extra safety margin applied after fat-finger / post-only rejections
         self._extra_spread_ticks = 0
+        # WS order events that arrived before the REST response registered the
+        # order (the stream can outrun sendTx confirmation) — replayed on register
+        self._unmatched_orders: dict[int, dict] = {}
 
     # ── derived market state ─────────────────────────────────────────────────
     @property
@@ -214,11 +217,14 @@ class MarketWorker:
         except ExecutionError as exc:
             self._on_exec_error(side, exc)
             return
-        self.orders[side] = OrderState(
-            client_order_index=coi,
-            price=desired_px,
-            size=size_base,
-            is_ask=(side == "ask"),
+        self.register_order(
+            side,
+            OrderState(
+                client_order_index=coi,
+                price=desired_px,
+                size=size_base,
+                is_ask=(side == "ask"),
+            ),
         )
         self.consecutive_errors = 0
 
@@ -273,17 +279,27 @@ class MarketWorker:
             activity.err("CLOSE", self.market.symbol, f"flatten failed: {exc.name}: {exc}")
 
     # ── WS event ingestion (order/trade/position confirmations) ─────────────
+    def register_order(self, side: str, state: OrderState) -> None:
+        """Attach a just-placed order and replay any WS confirmation that
+        raced ahead of the REST response."""
+        self.orders[side] = state
+        buffered = self._unmatched_orders.pop(state.client_order_index, None)
+        if buffered is not None:
+            self.on_order_event(buffered)
+
     def on_order_event(self, order: dict) -> None:
         """Order update from account_all_orders — the source of truth.
         sendTx code=200 is never trusted; THIS is what confirms an order."""
         coi = _i(order.get("client_order_index") or order.get("client_order_id"))
         oi = _i(order.get("order_index") or order.get("order_id"))
         status = str(order.get("status", "")).lower()
+        matched = False
         for side in ("bid", "ask"):
             state = self.orders[side]
             if state is None:
                 continue
             if coi is not None and state.client_order_index == coi:
+                matched = True
                 if oi is not None:
                     state.order_index = oi
                 prev = state.status
@@ -305,6 +321,11 @@ class MarketWorker:
                     self.orders[side] = None
                 elif status == "filled":
                     self.orders[side] = None
+        if not matched and coi is not None:
+            # Keep the event so register_order can replay it (bounded buffer).
+            self._unmatched_orders[coi] = order
+            while len(self._unmatched_orders) > 64:
+                self._unmatched_orders.pop(next(iter(self._unmatched_orders)))
 
     def on_trade_event(self, trade: dict) -> None:
         """Fill from account_all_trades: update position, volume, spread PnL."""

@@ -258,9 +258,11 @@ class ExecutionEngine:
         if market_id is not None:
             kwargs["cancel_all_market_index"] = market_id
         async with self.pool.lock_for_key(key):
+            # Immediate cancel-all requires a nil (0) time on the venue;
+            # a real timestamp is only valid for the SCHEDULED variant.
             tx, resp, err = await self.client.cancel_all_orders(
                 time_in_force=self.client.CANCEL_ALL_TIF_IMMEDIATE,
-                timestamp_ms=int(time.time() * 1000),
+                timestamp_ms=0,
                 api_key_index=key,
                 **kwargs,
             )
