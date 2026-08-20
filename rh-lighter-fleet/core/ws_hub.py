@@ -27,8 +27,11 @@ import aiohttp
 from .config import WS_URL
 from .logging_utils import activity
 
-PING_INTERVAL_S = 60
-STALE_AFTER_S = 30
+# Ping must be MORE frequent than the staleness threshold: the venue answers
+# app-level pings with a "pong" TEXT message, so an idle-but-healthy account
+# stream stays visibly fresh instead of tripping false stale reconnects.
+PING_INTERVAL_S = 20
+STALE_AFTER_S = 45
 RECONNECT_BASE_DELAY_S = 1.0
 RECONNECT_MAX_DELAY_S = 30.0
 
