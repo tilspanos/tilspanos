@@ -170,6 +170,8 @@ tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
     <div class="field"><label>Leverage (x)</label><input id="cfgLev" type="number" min="1" max="50" step="1"></div>
     <div class="field"><label>Max Markets</label><input id="cfgMax" type="number" min="1" max="200" step="1"></div>
     <div class="field"><label>Daily Loss Halt ($)</label><input id="cfgLoss" type="number" min="1" step="10"></div>
+    <div class="field"><label>Max Hold (s)</label><input id="cfgHold" type="number" min="10" step="10"></div>
+    <div class="field"><label>Stop (bps)</label><input id="cfgStop" type="number" min="1" step="1"></div>
     <button class="primary" id="btnApplyCfg">Apply</button>
   </div>
   <div class="settings-note">
@@ -248,7 +250,7 @@ $("btnFlattenAll").onclick = () => { if (confirm("Flatten ALL positions and canc
 const CFG_FIELDS = {
   cfgSize: "order_size_usd", cfgSpread: "spread_bps", cfgRequote: "requote_bps",
   cfgRefresh: "refresh_ms", cfgLev: "leverage", cfgMax: "max_concurrent_markets",
-  cfgLoss: "daily_loss_usd",
+  cfgLoss: "daily_loss_usd", cfgHold: "max_hold_s", cfgStop: "adverse_stop_bps",
 };
 let cfgLoaded = false;
 function fillConfig(cfg, force) {

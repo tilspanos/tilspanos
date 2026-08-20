@@ -103,6 +103,9 @@ class FleetOrchestrator:
             order_size_usd=float(p.get("order_size_usd", self.cfg.order_size_usd)),
             leverage=int(p.get("leverage", self.cfg.leverage)),
             refresh_ms=int(p.get("refresh_ms", self.cfg.refresh_ms)),
+            max_hold_s=float(p.get("max_hold_s", self.cfg.max_hold_s)),
+            adverse_stop_bps=float(p.get("adverse_stop_bps", self.cfg.adverse_stop_bps)),
+            market_loss_usd=float(p.get("market_loss_usd", self.cfg.market_loss_usd)),
         )
 
     async def start_view_only(self) -> None:
@@ -368,6 +371,8 @@ class FleetOrchestrator:
             "leverage": self.cfg.leverage,
             "max_concurrent_markets": self.cfg.max_concurrent_markets,
             "daily_loss_usd": self.cfg.daily_loss_usd,
+            "max_hold_s": self.cfg.max_hold_s,
+            "adverse_stop_bps": self.cfg.adverse_stop_bps,
         }
 
     async def apply_settings(self, settings: dict) -> dict:
@@ -391,6 +396,8 @@ class FleetOrchestrator:
         leverage = _num("leverage", 1, 50, int)
         max_markets = _num("max_concurrent_markets", 1, 200, int)
         daily_loss = _num("daily_loss_usd", 1, 1_000_000)
+        max_hold = _num("max_hold_s", 10, 3600)
+        adverse_stop = _num("adverse_stop_bps", 1, 500)
 
         if order_size is not None:
             cfg.order_size_usd = order_size
@@ -407,6 +414,10 @@ class FleetOrchestrator:
         if daily_loss is not None:
             cfg.daily_loss_usd = daily_loss
             self.risk.daily_loss_usd = daily_loss
+        if max_hold is not None:
+            cfg.max_hold_s = max_hold
+        if adverse_stop is not None:
+            cfg.adverse_stop_bps = adverse_stop
 
         changed = []
         for worker in self.workers.values():
@@ -418,6 +429,10 @@ class FleetOrchestrator:
                 worker.requote_bps = requote
             if refresh is not None:
                 worker.refresh_ms = refresh
+            if max_hold is not None:
+                worker.max_hold_s = max_hold
+            if adverse_stop is not None:
+                worker.adverse_stop_bps = adverse_stop
             if leverage is not None and worker.leverage != leverage:
                 worker.leverage = leverage
                 changed.append(worker)

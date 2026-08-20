@@ -57,6 +57,10 @@ class MarketWorker:
         order_size_usd: float,
         leverage: int,
         refresh_ms: int,
+        max_hold_s: float = 120.0,
+        adverse_stop_bps: float = 10.0,
+        market_loss_usd: float = 10.0,
+        vol_mult: float = 0.5,
     ) -> None:
         self.market = market
         self.hub = hub
@@ -66,6 +70,10 @@ class MarketWorker:
         self.order_size_usd = order_size_usd
         self.leverage = leverage
         self.refresh_ms = refresh_ms
+        self.max_hold_s = max_hold_s
+        self.adverse_stop_bps = adverse_stop_bps
+        self.market_loss_usd = market_loss_usd
+        self.vol_mult = vol_mult
 
         self.enabled = True
         self.orders: dict[str, OrderState | None] = {"bid": None, "ask": None}
@@ -82,6 +90,10 @@ class MarketWorker:
         # WS order events that arrived before the REST response registered the
         # order (the stream can outrun sendTx confirmation) — replayed on register
         self._unmatched_orders: dict[int, dict] = {}
+        # inventory + adverse-selection state
+        self._pos_opened_ts: float | None = None
+        self._last_mid: float | None = None
+        self._vol_bps: float = 0.0  # EWMA of per-tick |mid move| in bps
 
     # ── derived market state ─────────────────────────────────────────────────
     @property
@@ -133,22 +145,53 @@ class MarketWorker:
             self.exec.record_veto(f"{m.symbol}: stale book (age={None if not book else int(book.age_ms)}ms) — not quoting blind")
             return
 
-        # RULE: never MM while holding a position — flatten first.
-        if abs(self.position.size) >= m.min_size_step:
+        # Auto-disable a market that keeps losing: protect the fleet's PnL.
+        if self.realized_pnl < -abs(self.market_loss_usd):
+            self.enabled = False
+            activity.err(
+                "RISK", m.symbol,
+                f"realized loss ${-self.realized_pnl:.2f} > ${self.market_loss_usd:.2f} limit — market disabled",
+            )
             await self.cancel_both_sides()
             await self.instant_close_ioc()
             return
+
+        # volatility estimate (EWMA of per-tick |mid move|, in bps)
+        if self._last_mid:
+            ret_bps = abs(mid - self._last_mid) / self._last_mid * 10_000
+            self._vol_bps = 0.8 * self._vol_bps + 0.2 * ret_bps
+        self._last_mid = mid
+
+        # RULE: never quote both sides while holding a position — work a
+        # passive exit instead (capture the full spread, don't pay it back).
+        if abs(self.position.size) >= m.min_size_step:
+            await self.manage_position()
+            return
+        self._pos_opened_ts = None
 
         if fleet_paused:
             return
 
         min_tick = m.min_tick
         extra = self._extra_spread_ticks * min_tick
-        half_spread = max(mid * (self.spread_bps / 10_000), min_tick) + extra
+        # widen with volatility: quoting tighter than the market moves per
+        # tick is how MMs get run over (capped at 25x the base spread)
+        half_bps = max(self.spread_bps, min(self._vol_bps * self.vol_mult, self.spread_bps * 25))
+        half_spread = max(mid * (half_bps / 10_000), min_tick) + extra
         size_base = self.order_size_usd / mid
 
-        bid_px = mid - half_spread
-        ask_px = mid + half_spread
+        # anchor on the microprice: top-of-book size imbalance predicts the
+        # next move, so lean quotes toward the pressured side
+        anchor = mid
+        bb, ba = book.best_bid, book.best_ask
+        if bb and ba:
+            bid_sz = book.bids.levels.get(bb, 0.0)
+            ask_sz = book.asks.levels.get(ba, 0.0)
+            if bid_sz > 0 and ask_sz > 0:
+                anchor = (bb * ask_sz + ba * bid_sz) / (bid_sz + ask_sz)
+
+        bid_px = anchor - half_spread
+        ask_px = anchor + half_spread
 
         # Fat-finger safety (official bounds):
         #   bid ≤ min(mark, best_ask) × 1.05,  ask ≥ max(mark, best_bid) × 0.95
@@ -243,6 +286,89 @@ class MarketWorker:
                 activity.err("RISK", m.symbol, "NotEnoughOrderMargin persists — market disabled")
         elif exc.code == 21718:
             activity.warn("ORDER", m.symbol, "MaxOrdersPerMarket — sweeping stale orders")
+
+    # ── inventory management (passive exit — the profitability core) ────────
+    async def manage_position(self) -> None:
+        """Holding inventory: rest a reduce-only POST_ONLY on the exit side at
+        entry + spread so the round trip earns the FULL spread. Fall back to a
+        taker IOC only when the position is held too long or moves against us."""
+        m = self.market
+        pos = self.position.size
+        mid = self.mid
+        if mid is None:
+            return
+        is_long = pos > 0
+        exit_side = "ask" if is_long else "bid"
+        entry_side = "bid" if is_long else "ask"
+
+        now = time.time()
+        if self._pos_opened_ts is None:
+            self._pos_opened_ts = now
+        held_s = now - self._pos_opened_ts
+        entry = self.position.avg_entry or mid
+        adverse_bps = ((entry - mid) if is_long else (mid - entry)) / entry * 10_000
+
+        # hard exits: cap the damage with a taker close
+        if held_s > self.max_hold_s or adverse_bps > self.adverse_stop_bps:
+            reason = "max hold" if held_s > self.max_hold_s else f"adverse {adverse_bps:.1f}bps"
+            activity.warn("CLOSE", m.symbol, f"passive exit abandoned ({reason}) — IOC flatten")
+            await self.cancel_both_sides()
+            await self.instant_close_ioc()
+            return
+
+        # only the exit quote should rest while we hold inventory
+        other = self.orders[entry_side]
+        if other is not None:
+            if other.order_index is not None and other.status in ("pending", "open"):
+                try:
+                    await self.exec.cancel(m, other.order_index)
+                except ExecutionError:
+                    pass
+            self.orders[entry_side] = None
+
+        # exit price: at least entry ± 1 tick (never exit at a loss passively),
+        # ideally entry ± half-spread; clamped so POST_ONLY cannot cross
+        book = self.book
+        half = max(mid * (self.spread_bps / 10_000), m.min_tick)
+        if is_long:
+            px = max(entry + m.min_tick, mid + half)
+            if book and book.best_bid:
+                px = max(px, book.best_bid + m.min_tick)
+        else:
+            px = min(entry - m.min_tick, mid - half)
+            if book and book.best_ask:
+                px = min(px, book.best_ask - m.min_tick)
+        px = m.round_price(px)
+
+        existing = self.orders[exit_side]
+        if existing is not None and existing.status in ("pending", "open"):
+            drift_bps = abs(existing.price - px) / px * 10_000
+            if drift_bps < max(self.requote_bps, 0.5):
+                return  # exit is resting where we want it
+            if existing.order_index is not None:
+                try:
+                    await self.exec.cancel(m, existing.order_index)
+                except ExecutionError:
+                    pass
+            self.orders[exit_side] = None
+            return  # fresh exit goes out next tick
+
+        size = round(abs(pos), m.size_decimals)
+        try:
+            coi = await self.exec.place_post_only(
+                m, is_ask=is_long, price=px, size_base=size, reduce_only=True
+            )
+        except ExecutionError as exc:
+            self._on_exec_error(exit_side, exc)
+            return
+        self.register_order(
+            exit_side,
+            OrderState(client_order_index=coi, price=px, size=size, is_ask=is_long),
+        )
+        activity.ok(
+            "CLOSE", m.symbol,
+            f"passive exit {exit_side} {size:.6g} @ {px} (entry {entry:.6g}, held {held_s:.0f}s)",
+        )
 
     # ── flatten ──────────────────────────────────────────────────────────────
     async def cancel_both_sides(self) -> None:
@@ -354,6 +480,10 @@ class MarketWorker:
         elif abs(signed) > abs(pos.size):  # flipped through zero
             pos.avg_entry = price
         pos.size = new_size
+        if abs(new_size) < self.market.min_size_step:
+            self._pos_opened_ts = None
+        elif self._pos_opened_ts is None:
+            self._pos_opened_ts = time.time()
 
         self.fill_count += 1
         self.volume_usd += notional
@@ -382,6 +512,10 @@ class MarketWorker:
             if sign is not None and int(sign) < 0:
                 size = -abs(size)
             self.position.size = size
+            if abs(size) < self.market.min_size_step:
+                self._pos_opened_ts = None
+            elif self._pos_opened_ts is None:
+                self._pos_opened_ts = time.time()
         entry = _f(position.get("avg_entry_price") or position.get("avg_entry"))
         if entry is not None:
             self.position.avg_entry = entry
