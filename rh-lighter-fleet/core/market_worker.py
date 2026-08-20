@@ -61,6 +61,8 @@ class MarketWorker:
         adverse_stop_bps: float = 10.0,
         market_loss_usd: float = 10.0,
         vol_mult: float = 0.5,
+        min_edge_bps: float = 0.5,
+        vol_breaker_bps: float = 2.5,
     ) -> None:
         self.market = market
         self.hub = hub
@@ -74,6 +76,8 @@ class MarketWorker:
         self.adverse_stop_bps = adverse_stop_bps
         self.market_loss_usd = market_loss_usd
         self.vol_mult = vol_mult
+        self.min_edge_bps = min_edge_bps
+        self.vol_breaker_bps = vol_breaker_bps
 
         self.enabled = True
         self.orders: dict[str, OrderState | None] = {"bid": None, "ask": None}
@@ -181,6 +185,29 @@ class MarketWorker:
             return
 
         min_tick = m.min_tick
+        bb, ba = book.best_bid, book.best_ask
+
+        # ── Circuit breakers: the cheapest volume is the toxic fill you skip ──
+        # 1. Vol breaker: when the market is running, pull quotes entirely
+        #    instead of standing in front of it.
+        if self._vol_bps > max(self.vol_breaker_bps, 3 * self.spread_bps):
+            self.exec.record_veto(f"{m.symbol}: vol {self._vol_bps:.2f}bps/tick > breaker — quotes pulled")
+            await self.cancel_both_sides()
+            return
+        # 2. Minimum edge: if the book spread is too tight to pay for the
+        #    risk, there is no trade. Joining a locked book only buys losses.
+        if bb and ba:
+            book_spread_bps = (ba - bb) / mid * 10_000
+            if book_spread_bps < self.min_edge_bps:
+                self.exec.record_veto(
+                    f"{m.symbol}: book spread {book_spread_bps:.2f}bps < min edge {self.min_edge_bps}bps — not quoting"
+                )
+                await self.cancel_both_sides()
+                return
+
+        # decay the post-only/fat-finger penalty once things are calm again
+        if self._extra_spread_ticks:
+            self._extra_spread_ticks -= 1
         extra = self._extra_spread_ticks * min_tick
         # widen with volatility: quoting tighter than the market moves per
         # tick is how MMs get run over (capped at 25x the base spread)
@@ -191,7 +218,6 @@ class MarketWorker:
         # anchor on the microprice: top-of-book size imbalance predicts the
         # next move, so lean quotes toward the pressured side
         anchor = mid
-        bb, ba = book.best_bid, book.best_ask
         if bb and ba:
             bid_sz = book.bids.levels.get(bb, 0.0)
             ask_sz = book.asks.levels.get(ba, 0.0)
@@ -200,6 +226,15 @@ class MarketWorker:
 
         bid_px = anchor - half_spread
         ask_px = anchor + half_spread
+
+        # ── JOIN, never improve: quote AT the best level, not inside the
+        # spread. Improving the book means being first in line for informed
+        # flow (pure adverse selection); joining earns the FULL book spread
+        # with far less toxicity.
+        if bb:
+            bid_px = min(bid_px, bb)
+        if ba:
+            ask_px = max(ask_px, ba)
 
         # Fat-finger safety (official bounds):
         #   bid ≤ min(mark, best_ask) × 1.05,  ask ≥ max(mark, best_bid) × 0.95
