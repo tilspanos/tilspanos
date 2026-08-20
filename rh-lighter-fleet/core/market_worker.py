@@ -301,20 +301,35 @@ class MarketWorker:
         exit_side = "ask" if is_long else "bid"
         entry_side = "bid" if is_long else "ask"
 
-        # Dust positions (partial fills below the venue's limit-order minimums)
-        # cannot be exited passively — the venue rejects the limit (21706).
-        # A reduce-only market IOC is accepted below the minimums, so use that.
+        # Dust positions (partial fills below the venue minimums) cannot be
+        # closed directly: the venue enforces min sizes on market orders too —
+        # the tx returns code=200 but the sequencer silently cancels it.
+        # Fix: top the position UP with one valid-size IOC so it crosses the
+        # minimum, then the normal exit path closes the whole thing.
         min_limit_size = max(
             m.min_base_amount, max(m.min_quote_amount, MIN_QUOTE_USDG) / mid
         )
         if abs(pos) < min_limit_size:
+            topup = max(m.min_base_amount, max(m.min_quote_amount, MIN_QUOTE_USDG) / mid * 1.02)
+            topup = round(topup, m.size_decimals)
             activity.warn(
                 "CLOSE", m.symbol,
-                f"dust position {pos:+.6g} below limit-order minimum ({min_limit_size:.6g}) — IOC flatten",
+                f"dust {pos:+.6g} below venue minimum {min_limit_size:.6g} — "
+                f"topping up {topup:.6g} to make it closeable",
             )
             await self.cancel_both_sides()
-            await self.instant_close_ioc()
-            return
+            worst = mid * (1.02 if is_long else 0.98)
+            try:
+                await self.exec.place_market_ioc(
+                    m,
+                    is_ask=not is_long,  # long dust -> buy more; short dust -> sell more
+                    size_base=topup,
+                    worst_price=m.round_price(worst),
+                    reduce_only=False,
+                )
+            except ExecutionError as exc:
+                activity.err("CLOSE", m.symbol, f"dust top-up failed: {exc.name}: {exc}")
+            return  # next tick sees a closeable position and exits normally
 
         now = time.time()
         if self._pos_opened_ts is None:
@@ -463,6 +478,14 @@ class MarketWorker:
                 elif status == "filled":
                     self.orders[side] = None
         if not matched and coi is not None:
+            # Surface silent rejections (e.g. market orders the sequencer
+            # cancels) — without this, failed IOCs are invisible.
+            if status.startswith("canceled"):
+                hint = CANCEL_REASONS.get(status, "")
+                activity.err(
+                    "ORDER", self.market.symbol,
+                    f"untracked order coi={coi} {status}" + (f" — {hint}" if hint else ""),
+                )
             # Keep the event so register_order can replay it (bounded buffer).
             self._unmatched_orders[coi] = order
             while len(self._unmatched_orders) > 64:
