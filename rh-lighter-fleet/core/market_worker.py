@@ -206,23 +206,22 @@ class MarketWorker:
         min_tick = m.min_tick
         bb, ba = book.best_bid, book.best_ask
 
-        # ── Circuit breakers: the cheapest volume is the toxic fill you skip ──
-        # 1. Vol breaker: when the market is running, pull quotes entirely
-        #    instead of standing in front of it.
+        # ── Circuit breakers: the cheapest volume is the toxic fill you skip.
+        # CRITICAL EXCEPTION: the side that REDUCES an open position is never
+        # silenced — killing the exit quote is what forces expensive IOCs.
+        breaker = None
         if self._vol_bps > max(self.vol_breaker_bps, 3 * self.spread_bps):
-            self.exec.record_veto(f"{m.symbol}: vol {self._vol_bps:.2f}bps/tick > breaker — quotes pulled")
-            await self.cancel_both_sides()
-            return
-        # 2. Minimum edge: if the book spread is too tight to pay for the
-        #    risk, there is no trade. Joining a locked book only buys losses.
-        if bb and ba:
+            breaker = f"vol {self._vol_bps:.2f}bps/tick > breaker"
+        elif bb and ba:
             book_spread_bps = (ba - bb) / mid * 10_000
             if book_spread_bps < self.min_edge_bps:
-                self.exec.record_veto(
-                    f"{m.symbol}: book spread {book_spread_bps:.2f}bps < min edge {self.min_edge_bps}bps — not quoting"
-                )
+                breaker = f"book spread {book_spread_bps:.2f}bps < min edge {self.min_edge_bps}bps"
+        if breaker:
+            self.exec.record_veto(f"{m.symbol}: {breaker} — no new risk")
+            if abs(pos) < m.min_size_step:
                 await self.cancel_both_sides()
                 return
+            # holding inventory: keep working the reducing side below
 
         # decay the post-only/fat-finger penalty once things are calm again
         if self._extra_spread_ticks:
@@ -296,11 +295,22 @@ class MarketWorker:
         # maker fills are most toxic when flow presses into the quote.
         # A STRONG trend alone gates the side being run over (selling into a
         # rally is how the 40bps-ramp losses happened); weaker momentum needs
-        # book-imbalance confirmation.
+        # book-imbalance confirmation. The REDUCING side is exempt from every
+        # gate and breaker: a reduce fill removes risk, and silencing the
+        # exit is what used to force taker IOCs at the backstop.
+        reducing_bid = pos < -m.min_size_step  # a bid closes a short
+        reducing_ask = pos > m.min_size_step   # an ask closes a long
         gate = 0.5
         strong_mom = max(0.8, 2 * self.spread_bps)
         skip_bid = self._mom_bps < -strong_mom or (self._mom_bps < -0.3 and imbalance < -gate)
         skip_ask = self._mom_bps > strong_mom or (self._mom_bps > 0.3 and imbalance > gate)
+        if breaker:  # breakers block only NEW risk
+            skip_bid = skip_bid or not reducing_bid
+            skip_ask = skip_ask or not reducing_ask
+        if reducing_bid:
+            skip_bid = False
+        if reducing_ask:
+            skip_ask = False
 
         # Venue minimums per side: max(min_base_amount, $10 USDG notional).
         min_quote = max(m.min_quote_amount, MIN_QUOTE_USDG)
