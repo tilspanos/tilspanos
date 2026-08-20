@@ -209,10 +209,17 @@ class FleetOrchestrator:
 
     async def stop(self, flatten: bool = True) -> None:
         self.running = False
-        for task in self._worker_tasks.values():
+        pending = list(self._worker_tasks.values()) + list(self._tasks.values())
+        for task in pending:
             task.cancel()
-        for task in self._tasks.values():
-            task.cancel()
+        # Await everything we cancelled: otherwise asyncio tears the loop down
+        # under still-pending tasks and floods the terminal with
+        # "Task was destroyed but it is pending!" noise that hides the real
+        # shutdown reason.
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._worker_tasks.clear()
+        self._tasks.clear()
         await self.watchdog.stop()
         if flatten and self.execution is not None:
             await self.flatten_all()

@@ -64,7 +64,18 @@ class Watchdog:
             fleet.execution.last_send_ts = max(fleet.execution.last_send_ts, now - 1)
             return
 
-        # 2. No-order watchdog: zero sendTx for 60s while live → CRASH loudly.
+        # Healthy resting quotes count as activity: in a calm market the
+        # right move is to NOT touch orders, which sends zero tx by design.
+        has_resting = any(
+            o is not None and o.status in ("pending", "open")
+            for w in fleet.active_workers()
+            for o in w.orders.values()
+        )
+        if has_resting:
+            fleet.execution.last_send_ts = max(fleet.execution.last_send_ts, now - 1)
+
+        # 2. No-order watchdog: zero sendTx AND zero resting quotes for 60s
+        #    while live → the execution path is actually broken → CRASH loudly.
         silent_for = now - fleet.execution.last_send_ts
         if silent_for > NO_ORDER_CRASH_S:
             vetoes = fleet.execution.recent_vetoes(20)

@@ -180,6 +180,10 @@ class WsConnection:
                                     break
                         finally:
                             ping_task.cancel()
+                            try:
+                                await ping_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
             except asyncio.CancelledError:
                 raise
             except aiohttp.WSServerHandshakeError as exc:
