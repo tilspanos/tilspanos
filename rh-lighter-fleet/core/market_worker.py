@@ -301,6 +301,21 @@ class MarketWorker:
         exit_side = "ask" if is_long else "bid"
         entry_side = "bid" if is_long else "ask"
 
+        # Dust positions (partial fills below the venue's limit-order minimums)
+        # cannot be exited passively — the venue rejects the limit (21706).
+        # A reduce-only market IOC is accepted below the minimums, so use that.
+        min_limit_size = max(
+            m.min_base_amount, max(m.min_quote_amount, MIN_QUOTE_USDG) / mid
+        )
+        if abs(pos) < min_limit_size:
+            activity.warn(
+                "CLOSE", m.symbol,
+                f"dust position {pos:+.6g} below limit-order minimum ({min_limit_size:.6g}) — IOC flatten",
+            )
+            await self.cancel_both_sides()
+            await self.instant_close_ioc()
+            return
+
         now = time.time()
         if self._pos_opened_ts is None:
             self._pos_opened_ts = now

@@ -31,6 +31,7 @@ ERROR_CODES = {
     21717: "MaxOrdersPerAccount",
     21718: "MaxOrdersPerMarket",
     21705: "PostOnlyWouldCross",
+    21706: "InvalidBaseOrQuoteAmount",
     21728: "ClientOrderIndexExists",
     21104: "InvalidNonce",
     21120: "InvalidSignature",
