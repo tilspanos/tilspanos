@@ -80,7 +80,14 @@ async def discover_account_index(l1_address: str) -> int:
     """Step 1 of the official get-started flow: accountsByL1Address."""
     api_client = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
     try:
-        resp = await lighter.AccountApi(api_client).accounts_by_l1_address(l1_address=l1_address)
+        try:
+            resp = await lighter.AccountApi(api_client).accounts_by_l1_address(l1_address=l1_address)
+        except lighter.ApiException as exc:
+            raise SystemExit(
+                f"FATAL: no Robinhood Lighter account found for {l1_address} "
+                f"(venue returned {exc.status}). Make sure this wallet has been "
+                "onboarded at https://robinhoodchain.lighter.xyz and holds USDG."
+            ) from exc
         subs = resp.sub_accounts
         if not subs:
             raise SystemExit(f"FATAL: no Lighter account found for {l1_address} on production.")

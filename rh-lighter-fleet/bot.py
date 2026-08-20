@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """RH Lighter fleet CLI.
 
+    python bot.py fleet setup-key [N] # one-time: register API key N (default 4) + write .env
     python bot.py fleet prove         # Phase-0 production proof (BTC+ETH+LIT)
     python bot.py fleet start         # start fleet + dashboard (foreground)
     python bot.py fleet dashboard     # VIEW-ONLY dashboard, no API keys needed
@@ -20,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -58,6 +60,99 @@ async def cmd_start() -> int:
         activity.warn("CTRL", "", "shutting down — flattening fleet")
         await fleet.stop(flatten=True)
         await runner.cleanup()
+    return 0
+
+
+async def cmd_setup_key(index_arg: str | None) -> int:
+    """One-time onboarding: generate a fresh API key pair, register it on the
+    venue at the chosen index (signed by your L1 wallet key), verify it, and
+    write the credentials to .env. The wallet key is used ONCE in memory to
+    sign the ChangePubKey transaction and is never stored or logged."""
+    import getpass
+    from pathlib import Path
+
+    import lighter
+
+    from core.config import BASE_URL, CHAIN_ID, RESERVED_API_KEY_INDICES, load_config
+    from core.signer_pool import discover_account_index
+
+    load_config(require_keys=False)  # runs the production-only environment guard
+
+    key_index = int(index_arg or os.environ.get("API_KEY_INDEX") or 4)
+    if key_index in RESERVED_API_KEY_INDICES or not (2 <= key_index <= 254):
+        print(f"API key index {key_index} is reserved or out of range — use 4-254 (not 157).")
+        return 1
+
+    l1_address = os.environ.get("L1_ADDRESS", "").strip() or input("L1 wallet address (0x...): ").strip()
+    eth_private_key = os.environ.get("ETH_PRIVATE_KEY", "").strip() or getpass.getpass(
+        "L1 wallet PRIVATE key (hidden; used once to sign key registration, never stored): "
+    ).strip()
+    if not l1_address or not eth_private_key:
+        print("Both the wallet address and its private key are required.")
+        return 1
+
+    account_index = await discover_account_index(l1_address)
+    print(f"account_index={account_index} (production, {BASE_URL})")
+
+    api_private_key, api_public_key, err = lighter.create_api_key()
+    if err is not None:
+        print(f"key generation failed: {err}")
+        return 1
+
+    client = lighter.SignerClient(
+        url=BASE_URL,
+        account_index=account_index,
+        api_private_keys={key_index: api_private_key},
+        chain_id=CHAIN_ID,
+    )
+    try:
+        resp, err = await client.change_api_key(
+            eth_private_key=eth_private_key,
+            new_pubkey=api_public_key,
+            api_key_index=key_index,
+        )
+        if err is not None:
+            print(f"key registration rejected by the venue: {err}")
+            return 1
+        print(f"ChangePubKey accepted (index {key_index}) — waiting for the venue to apply it…")
+        verify_err = "not checked"
+        for _ in range(15):
+            await asyncio.sleep(2)
+            verify_err = client.check_client()
+            if verify_err is None:
+                break
+        if verify_err is not None:
+            print(f"key not verified yet: {verify_err}")
+            print("It can take a little longer — re-run `python bot.py fleet setup-key` to retry,")
+            print("or verify manually before trading.")
+            return 1
+    finally:
+        await client.close()
+
+    env_path = Path(__file__).resolve().parent / ".env"
+    updates = {
+        "L1_ADDRESS": l1_address,
+        "ACCOUNT_INDEX": str(account_index),
+        "API_KEY_INDEX": str(key_index),
+        "API_PRIVATE_KEY": api_private_key,
+    }
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    seen = set()
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if key in updates:
+            lines[i] = f"{key}={updates[key]}"
+            seen.add(key)
+    for key, value in updates.items():
+        if key not in seen:
+            lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n")
+
+    print(f"\nAPI key registered and VERIFIED on production (index {key_index}).")
+    print(f"Credentials written to {env_path} — keep that file private.")
+    print("\nNext steps:")
+    print("  python bot.py fleet prove   # real-order proof gate, must exit 0")
+    print("  python bot.py fleet start   # go live")
     return 0
 
 
@@ -191,11 +286,13 @@ def main() -> int:
     fleet = sub.add_parser("fleet", help="fleet operations")
     fleet.add_argument(
         "command",
-        choices=["prove", "start", "dashboard", "stop", "status", "flatten", "flatten-all"],
+        choices=["setup-key", "prove", "start", "dashboard", "stop", "status", "flatten", "flatten-all"],
     )
-    fleet.add_argument("symbol", nargs="?", help="market symbol for `flatten`")
+    fleet.add_argument("symbol", nargs="?", help="market symbol for `flatten`, key index for `setup-key`")
     args = parser.parse_args()
 
+    if args.command == "setup-key":
+        return asyncio.run(cmd_setup_key(args.symbol))
     if args.command == "prove":
         from scripts.prove_production import main as prove_main
         return asyncio.run(prove_main())
