@@ -62,6 +62,7 @@ class FleetOrchestrator:
         self.running = False
         self.paused = False
         self.view_only = False  # dashboard preview: live market data, no signing keys
+        self.start_collateral: float | None = None  # session baseline for venue net PnL
         self.session_start: float = 0.0
         self._tasks: dict[str, asyncio.Task] = {}
         self._worker_tasks: dict[int, asyncio.Task] = {}
@@ -160,6 +161,13 @@ class FleetOrchestrator:
         self.paused = False
         self.session_start = time.time()
         self.execution.last_send_ts = time.time()
+
+        # Seed venue truth (balance + positions) and set the session baseline
+        # for net PnL. Also cleans up any position left from a previous run.
+        await self._reconcile_once()
+        self.start_collateral = self.risk.collateral
+        if self.start_collateral is not None:
+            activity.ok("BOOT", "", f"session baseline: ${self.start_collateral:.2f} USDG on the venue")
 
         for mid in list(self.enabled_market_ids):
             self._spawn_worker_loop(mid)
@@ -347,45 +355,47 @@ class FleetOrchestrator:
                 except ExecutionError as exc:
                     activity.err("RISK", "", f"stale sweep failed: {exc}")
 
-    async def _reconcile_loop(self) -> None:
-        """Every 30s pull the VENUE's view of our positions over REST and
-        overwrite the local trackers. The WS stream is fast but can drop or
-        mis-shape events; this loop guarantees the fleet always converges to
+    async def _reconcile_once(self) -> dict | None:
+        """Pull the VENUE's view of balance + positions over public REST and
+        overwrite the local trackers. Guarantees the fleet converges to
         exchange truth (a phantom local position can otherwise loop forever
         on reduce-only orders the sequencer silently cancels)."""
         from .config import BASE_URL
 
         url = f"{BASE_URL.rstrip('/')}/api/v1/account"
         params = {"by": "index", "value": str(self.cfg.account_index)}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as resp:
+                    data = await resp.json()
+        except Exception:
+            return None  # transient; next cycle
+        accounts = data.get("accounts") or []
+        if not accounts:
+            return None
+        stats = accounts[0]
+        self.risk.on_account_stats(stats)
+        for pos in stats.get("positions") or []:
+            worker = self.workers.get(pos.get("market_id"))
+            if worker is None:
+                continue
+            venue_size = abs(float(pos.get("position", 0) or 0))
+            if int(pos.get("sign", 1) or 1) < 0:
+                venue_size = -venue_size
+            local_size = worker.position.size
+            if abs(venue_size - local_size) >= worker.market.min_size_step:
+                activity.warn(
+                    "RECON", worker.market.symbol,
+                    f"local position {local_size:+.6g} != venue {venue_size:+.6g} — corrected to venue",
+                )
+            worker.on_position_event(pos)
+        return stats
+
+    async def _reconcile_loop(self) -> None:
         while True:
             await asyncio.sleep(RECONCILE_INTERVAL_S)
-            if not self.running:
-                continue
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, params=params) as resp:
-                        data = await resp.json()
-            except Exception:
-                continue  # transient; next cycle
-            accounts = data.get("accounts") or []
-            if not accounts:
-                continue
-            stats = accounts[0]
-            self.risk.on_account_stats(stats)
-            for pos in stats.get("positions") or []:
-                worker = self.workers.get(pos.get("market_id"))
-                if worker is None:
-                    continue
-                venue_size = abs(float(pos.get("position", 0) or 0))
-                if int(pos.get("sign", 1) or 1) < 0:
-                    venue_size = -venue_size
-                local_size = worker.position.size
-                if abs(venue_size - local_size) >= worker.market.min_size_step:
-                    activity.warn(
-                        "RECON", worker.market.symbol,
-                        f"local position {local_size:+.6g} != venue {venue_size:+.6g} — corrected to venue",
-                    )
-                worker.on_position_event(pos)
+            if self.running:
+                await self._reconcile_once()
 
     # ── account stream routing ───────────────────────────────────────────────
     async def _route_order_update(self, mtype: str, msg: dict) -> None:
@@ -527,6 +537,12 @@ class FleetOrchestrator:
             "margin_used": self.risk.margin_used_fraction,
             "halted": self.risk.halted,
             "sent_tx": self.execution.sent_tx_count if self.execution else 0,
+            "balance": self.risk.collateral,
+            "net_pnl": (
+                round(self.risk.collateral - self.start_collateral, 4)
+                if self.risk.collateral is not None and self.start_collateral is not None
+                else None
+            ),
         }
 
     def snapshot(self) -> dict:

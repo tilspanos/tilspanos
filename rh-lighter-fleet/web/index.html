@@ -152,6 +152,8 @@ tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
 </header>
 
 <div class="cards">
+  <div class="card"><div class="label">Net PnL &mdash; Venue, Session</div><div class="value mono" id="stNet">&ndash;</div></div>
+  <div class="card"><div class="label">Balance (USDG)</div><div class="value mono" id="stBalance">&ndash;</div></div>
   <div class="card"><div class="label">Volume Routed</div><div class="value mono" id="stVolume">$0</div></div>
   <div class="card"><div class="label">Fills</div><div class="value mono" id="stFills">0</div></div>
   <div class="card"><div class="label">Est. Spread PnL</div><div class="value mono" id="stPnl">$0.00</div></div>
@@ -349,6 +351,14 @@ function render(snap) {
   $("stOrders").textContent = st.open_orders;
   $("stMargin").textContent = st.margin_used == null ? "\u2013" : Math.round(st.margin_used * 100) + "%";
   $("stTx").textContent = st.sent_tx;
+  $("stBalance").textContent = st.balance == null ? "\u2013" : fmtUsd(st.balance, 2);
+  const netEl = $("stNet");
+  if (st.net_pnl == null) {
+    netEl.textContent = "\u2013"; netEl.className = "value mono";
+  } else {
+    netEl.textContent = (st.net_pnl >= 0 ? "+" : "") + fmtUsd(st.net_pnl, 2).replace("+", "");
+    netEl.className = "value mono " + (st.net_pnl >= 0 ? "pos" : "neg");
+  }
 
   renderPills();
 
