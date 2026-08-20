@@ -102,6 +102,9 @@ class MarketWorker:
         self._vol_bps: float = 0.0  # EWMA of per-tick |mid move| in bps
         self._mom_bps: float = 0.0  # signed EWMA of per-tick mid moves (momentum)
         self._last_topup_ts: float = 0.0
+        # cois of orders WE cancelled — their WS cancel confirmations are
+        # expected and must not be reported as silent rejections
+        self._self_cancelled: set[int] = set()
         # our venue account, used to derive trade side from ask/bid account ids
         self.account_index: int | None = None
 
@@ -290,12 +293,14 @@ class MarketWorker:
         ask_px = m.round_price(ask_px)
 
         # ── Contrarian gate (arXiv 2502.18625, live BTC-perp experiment):
-        # maker fills are most toxic when momentum AND book imbalance both
-        # press into the quote. Skip the side that would be run over;
-        # counter-trading the pressure is where maker strategies profit.
+        # maker fills are most toxic when flow presses into the quote.
+        # A STRONG trend alone gates the side being run over (selling into a
+        # rally is how the 40bps-ramp losses happened); weaker momentum needs
+        # book-imbalance confirmation.
         gate = 0.5
-        skip_bid = self._mom_bps < -0.3 and imbalance < -gate
-        skip_ask = self._mom_bps > 0.3 and imbalance > gate
+        strong_mom = max(0.8, 2 * self.spread_bps)
+        skip_bid = self._mom_bps < -strong_mom or (self._mom_bps < -0.3 and imbalance < -gate)
+        skip_ask = self._mom_bps > strong_mom or (self._mom_bps > 0.3 and imbalance > gate)
 
         # Venue minimums per side: max(min_base_amount, $10 USDG notional).
         min_quote = max(m.min_quote_amount, MIN_QUOTE_USDG)
@@ -338,11 +343,18 @@ class MarketWorker:
                 "ask", ask_px, _clamp_size(ask_px, ask_size), reduce_only=at_limit_long
             )
 
+    def _mark_self_cancelled(self, order: "OrderState | None") -> None:
+        if order is not None:
+            self._self_cancelled.add(order.client_order_index)
+            while len(self._self_cancelled) > 128:
+                self._self_cancelled.pop()
+
     async def _cancel_side(self, side: str) -> None:
         order = self.orders[side]
         if order is not None and order.order_index is not None and order.status in ("pending", "open"):
             try:
                 await self.exec.cancel(self.market, order.order_index)
+                self._mark_self_cancelled(order)
             except ExecutionError:
                 pass
         self.orders[side] = None
@@ -357,6 +369,7 @@ class MarketWorker:
             if existing.order_index is not None:
                 try:
                     await self.exec.cancel(m, existing.order_index)
+                    self._mark_self_cancelled(existing)
                     activity.ok(
                         "ORDER", m.symbol,
                         f"{side} requote {existing.price}→{desired_px} (drift {drift_bps:.2f}bps)",
@@ -451,6 +464,7 @@ class MarketWorker:
             if order and order.order_index is not None and order.status in ("pending", "open"):
                 try:
                     await self.exec.cancel(self.market, order.order_index)
+                    self._mark_self_cancelled(order)
                 except ExecutionError as exc:
                     activity.warn("ORDER", self.market.symbol, f"cancel {side} failed: {exc}")
             self.orders[side] = None
@@ -522,6 +536,9 @@ class MarketWorker:
                 elif status == "filled":
                     self.orders[side] = None
         if not matched and coi is not None:
+            if coi in self._self_cancelled:
+                self._self_cancelled.discard(coi)
+                return  # expected confirmation of our own cancel — not an error
             # Surface silent rejections (e.g. market orders the sequencer
             # cancels) — without this, failed IOCs are invisible.
             if status.startswith("canceled"):

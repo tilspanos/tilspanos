@@ -79,11 +79,13 @@ class ExecutionEngine:
         self.client = pool.client
         self.sent_tx_count = 0
         self.last_send_ts: float = time.time()
+        self.last_veto_ts: float = 0.0  # deliberate abstentions count as liveness
         self.rate_limited_until: float = 0.0
         self._veto_log: list[str] = []
 
     # ── bookkeeping used by the watchdog ─────────────────────────────────────
     def record_veto(self, reason: str) -> None:
+        self.last_veto_ts = time.time()
         self._veto_log.append(f"{time.strftime('%H:%M:%S')} {reason}")
         if len(self._veto_log) > 40:
             self._veto_log = self._veto_log[-40:]

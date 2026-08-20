@@ -74,9 +74,11 @@ class Watchdog:
         if has_resting:
             fleet.execution.last_send_ts = max(fleet.execution.last_send_ts, now - 1)
 
-        # 2. No-order watchdog: zero sendTx AND zero resting quotes for 60s
-        #    while live → the execution path is actually broken → CRASH loudly.
-        silent_for = now - fleet.execution.last_send_ts
+        # 2. No-order watchdog: crash only when there is no traffic, no
+        #    resting quote AND no deliberate abstention (veto). A fleet that
+        #    is actively DECIDING not to quote (vol breaker, gates, min edge)
+        #    is healthy — a fleet that stopped deciding is broken.
+        silent_for = now - max(fleet.execution.last_send_ts, fleet.execution.last_veto_ts)
         if silent_for > NO_ORDER_CRASH_S:
             vetoes = fleet.execution.recent_vetoes(20)
             activity.err(
