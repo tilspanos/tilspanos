@@ -94,6 +94,9 @@ class MarketWorker:
         self._pos_opened_ts: float | None = None
         self._last_mid: float | None = None
         self._vol_bps: float = 0.0  # EWMA of per-tick |mid move| in bps
+        self._last_topup_ts: float = 0.0
+        # our venue account, used to derive trade side from ask/bid account ids
+        self.account_index: int | None = None
 
     # ── derived market state ─────────────────────────────────────────────────
     @property
@@ -310,6 +313,12 @@ class MarketWorker:
             m.min_base_amount, max(m.min_quote_amount, MIN_QUOTE_USDG) / mid
         )
         if abs(pos) < min_limit_size:
+            # Cooldown: never top-up more than once a minute — if the first
+            # one didn't resolve the dust, wait for position reconciliation
+            # instead of buying again.
+            if time.time() - self._last_topup_ts < 60:
+                return
+            self._last_topup_ts = time.time()
             topup = max(m.min_base_amount, max(m.min_quote_amount, MIN_QUOTE_USDG) / mid * 1.02)
             topup = round(topup, m.size_decimals)
             activity.warn(
@@ -497,10 +506,22 @@ class MarketWorker:
         size = _f(trade.get("size") or trade.get("filled_base_amount"))
         if price is None or size is None:
             return
-        is_ask = bool(trade.get("is_ask")) if "is_ask" in trade else (
-            str(trade.get("side", "")).lower() in ("sell", "ask")
-        )
-        is_maker = bool(trade.get("is_maker", trade.get("maker", True)))
+        # Venue trade messages carry no "side" field — OUR side is derived
+        # from which account id (ask or bid) matches ours.
+        ask_acct = _i(trade.get("ask_account_id"))
+        bid_acct = _i(trade.get("bid_account_id"))
+        if self.account_index is not None and (ask_acct is not None or bid_acct is not None):
+            is_ask = ask_acct == self.account_index
+            if not is_ask and bid_acct != self.account_index:
+                return  # not our trade at all
+            maker_is_ask = trade.get("is_maker_ask")
+            is_maker = bool(maker_is_ask) == is_ask if maker_is_ask is not None else True
+        elif "is_ask" in trade:
+            is_ask = bool(trade.get("is_ask"))
+            is_maker = bool(trade.get("is_maker", trade.get("maker", True)))
+        else:
+            is_ask = str(trade.get("side", "")).lower() in ("sell", "ask")
+            is_maker = bool(trade.get("is_maker", trade.get("maker", True)))
         notional = price * size
         signed = -size if is_ask else size
 

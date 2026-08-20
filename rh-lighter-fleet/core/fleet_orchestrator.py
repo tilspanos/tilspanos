@@ -10,6 +10,7 @@ import random
 import time
 from pathlib import Path
 
+import aiohttp
 import yaml
 
 from .config import FleetConfig
@@ -24,6 +25,7 @@ from .ws_hub import WsHub
 
 PRESETS_PATH = Path(__file__).resolve().parent.parent / "configs" / "market_presets.yaml"
 AUTH_REFRESH_S = 45 * 60  # tokens live 1h; refresh comfortably before expiry
+RECONCILE_INTERVAL_S = 30  # venue-truth position sync cadence
 
 
 def load_presets(path: Path = PRESETS_PATH) -> dict:
@@ -94,7 +96,7 @@ class FleetOrchestrator:
 
     def _build_worker(self, market: Market) -> MarketWorker:
         p = preset_for(self.presets, market.symbol)
-        return MarketWorker(
+        worker = MarketWorker(
             market,
             self.hub,
             self.execution,
@@ -107,6 +109,8 @@ class FleetOrchestrator:
             adverse_stop_bps=float(p.get("adverse_stop_bps", self.cfg.adverse_stop_bps)),
             market_loss_usd=float(p.get("market_loss_usd", self.cfg.market_loss_usd)),
         )
+        worker.account_index = self.cfg.account_index
+        return worker
 
     async def start_view_only(self) -> None:
         """Dashboard preview: live production market data for the configured
@@ -162,6 +166,7 @@ class FleetOrchestrator:
         self._tasks["resync"] = asyncio.create_task(self.registry.run_resync_loop())
         self._tasks["auth"] = asyncio.create_task(self._auth_refresh_loop())
         self._tasks["risk"] = asyncio.create_task(self._risk_loop())
+        self._tasks["reconcile"] = asyncio.create_task(self._reconcile_loop())
         self.watchdog.start()
 
         active = self.active_workers()
@@ -334,6 +339,46 @@ class FleetOrchestrator:
                     await self.execution.cancel_all()
                 except ExecutionError as exc:
                     activity.err("RISK", "", f"stale sweep failed: {exc}")
+
+    async def _reconcile_loop(self) -> None:
+        """Every 30s pull the VENUE's view of our positions over REST and
+        overwrite the local trackers. The WS stream is fast but can drop or
+        mis-shape events; this loop guarantees the fleet always converges to
+        exchange truth (a phantom local position can otherwise loop forever
+        on reduce-only orders the sequencer silently cancels)."""
+        from .config import BASE_URL
+
+        url = f"{BASE_URL.rstrip('/')}/api/v1/account"
+        params = {"by": "index", "value": str(self.cfg.account_index)}
+        while True:
+            await asyncio.sleep(RECONCILE_INTERVAL_S)
+            if not self.running:
+                continue
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params) as resp:
+                        data = await resp.json()
+            except Exception:
+                continue  # transient; next cycle
+            accounts = data.get("accounts") or []
+            if not accounts:
+                continue
+            stats = accounts[0]
+            self.risk.on_account_stats(stats)
+            for pos in stats.get("positions") or []:
+                worker = self.workers.get(pos.get("market_id"))
+                if worker is None:
+                    continue
+                venue_size = abs(float(pos.get("position", 0) or 0))
+                if int(pos.get("sign", 1) or 1) < 0:
+                    venue_size = -venue_size
+                local_size = worker.position.size
+                if abs(venue_size - local_size) >= worker.market.min_size_step:
+                    activity.warn(
+                        "RECON", worker.market.symbol,
+                        f"local position {local_size:+.6g} != venue {venue_size:+.6g} — corrected to venue",
+                    )
+                worker.on_position_event(pos)
 
     # ── account stream routing ───────────────────────────────────────────────
     async def _route_order_update(self, mtype: str, msg: dict) -> None:
