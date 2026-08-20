@@ -75,6 +75,9 @@ class FleetConfig:
     keys: list[KeySlot]
 
     enabled_groups: list[str] = field(default_factory=lambda: ["crypto"])
+    # If False (default), `fleet start` boots with market data live but NO
+    # quoting — the user enables individual markets from the dashboard pills.
+    quote_on_start: bool = False
     order_size_usd: float = 25.0
     spread_bps: float = 0.15
     requote_bps: float = 0.02
@@ -169,6 +172,8 @@ def load_config(require_keys: bool = True) -> FleetConfig:
         account_index=account_index,
         keys=keys,
         enabled_groups=groups,
+        quote_on_start=os.environ.get("FLEET_QUOTE_ON_START", "false").strip().lower()
+        in ("1", "true", "yes"),
         order_size_usd=float(os.environ.get("FLEET_ORDER_SIZE_USD", "25")),
         spread_bps=float(os.environ.get("FLEET_SPREAD_BPS", "0.15")),
         requote_bps=float(os.environ.get("FLEET_REQUOTE_BPS", "0.02")),

@@ -135,10 +135,17 @@ class FleetOrchestrator:
                 f"FATAL: enabled groups {self.cfg.enabled_groups} matched zero markets."
             )
         for market in selected:
-            self.workers[market.market_id] = self._build_worker(market)
-            self.enabled_market_ids.add(market.market_id)
+            worker = self._build_worker(market)
+            # Markets are OPT-IN: unless FLEET_QUOTE_ON_START=true, nothing
+            # quotes until the user enables it from the dashboard pills.
+            worker.enabled = self.cfg.quote_on_start
+            self.workers[market.market_id] = worker
+            if worker.enabled:
+                self.enabled_market_ids.add(market.market_id)
 
-        await self.hub.start_market_data(sorted(self.enabled_market_ids))
+        # Subscribe books for every candidate market (cheap) so enabling a
+        # pill later quotes immediately with a warm order book.
+        await self.hub.start_market_data(sorted(self.workers))
         auth_token = self.pool.create_auth_token()
         await self.hub.start_account(self.cfg.account_index, auth_token)
 
@@ -154,8 +161,16 @@ class FleetOrchestrator:
         self._tasks["risk"] = asyncio.create_task(self._risk_loop())
         self.watchdog.start()
 
-        names = ", ".join(w.market.symbol for w in self.workers.values())
-        activity.ok("BOOT", "", f"fleet LIVE on {len(self.workers)} markets: {names}")
+        active = self.active_workers()
+        if active:
+            names = ", ".join(w.market.symbol for w in active)
+            activity.ok("BOOT", "", f"fleet LIVE — quoting {len(active)} markets: {names}")
+        else:
+            activity.ok(
+                "BOOT", "",
+                f"fleet LIVE — {len(self.workers)} markets ready, NONE quoting yet. "
+                "Enable markets from the dashboard pills to start trading.",
+            )
 
     def _spawn_worker_loop(self, market_id: int) -> None:
         old = self._worker_tasks.get(market_id)
@@ -274,8 +289,15 @@ class FleetOrchestrator:
     async def _on_new_market(self, market: Market) -> None:
         activity.ok("SYNC", market.symbol, f"new market {market.market_id} discovered — hot-adding with default preset")
         if "all" in self.cfg.enabled_groups or market.group in self.cfg.enabled_groups:
-            if len(self.active_workers()) < self.cfg.max_concurrent_markets:
+            # Never auto-quote a new market unless the user opted into
+            # quote-on-start; otherwise it just appears as a selectable pill.
+            if self.cfg.quote_on_start and len(self.active_workers()) < self.cfg.max_concurrent_markets:
                 await self.set_market_enabled(market.market_id, True)
+            elif market.market_id not in self.workers:
+                self.workers[market.market_id] = self._build_worker(market)
+                self.workers[market.market_id].enabled = False
+                if self.running:
+                    await self.hub.add_market(market.market_id)
 
     # ── background loops ─────────────────────────────────────────────────────
     async def _auth_refresh_loop(self) -> None:

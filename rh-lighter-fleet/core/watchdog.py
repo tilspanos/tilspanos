@@ -58,8 +58,9 @@ class Watchdog:
         # 1. WS stale → reconnect that channel.
         await fleet.hub.reconnect_stale()
 
-        if not fleet.running or fleet.paused:
-            # keep send-clock fresh so we don't crash the moment we unpause
+        if not fleet.running or fleet.paused or not fleet.active_workers():
+            # Paused, stopped, or user has no markets enabled (opt-in mode):
+            # keep the send-clock fresh so we don't crash the moment quoting resumes.
             fleet.execution.last_send_ts = max(fleet.execution.last_send_ts, now - 1)
             return
 
