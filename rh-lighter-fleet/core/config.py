@@ -75,6 +75,8 @@ class FleetConfig:
     keys: list[KeySlot]
 
     enabled_groups: list[str] = field(default_factory=lambda: ["crypto"])
+    # quoting strategy: avellaneda | mid | grid | rgrid | dgrid | signal
+    strategy: str = "avellaneda"
     # If False (default), `fleet start` boots with market data live but NO
     # quoting — the user enables individual markets from the dashboard pills.
     quote_on_start: bool = False
@@ -176,6 +178,7 @@ def load_config(require_keys: bool = True) -> FleetConfig:
         account_index=account_index,
         keys=keys,
         enabled_groups=groups,
+        strategy=os.environ.get("FLEET_STRATEGY", "avellaneda").strip().lower(),
         quote_on_start=os.environ.get("FLEET_QUOTE_ON_START", "false").strip().lower()
         in ("1", "true", "yes"),
         order_size_usd=float(os.environ.get("FLEET_ORDER_SIZE_USD", "25")),

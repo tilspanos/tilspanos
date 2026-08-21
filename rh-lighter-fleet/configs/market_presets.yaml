@@ -6,7 +6,13 @@
 # refresh_ms: tick cadence for the market worker
 
 defaults:
-  spread_bps: 0.15      # Breads default (join-at-best rule caps quotes at the book anyway)
+  strategy: avellaneda  # avellaneda | mid | grid | rgrid | dgrid | signal
+  # strategy params (used by the mode that reads them):
+  #   bias: -1..1 (mid mode directional bias)
+  #   grid_reset_bps: 25 (grid soft reset to mid)
+  #   dgrid_trend_bps: 1.0 (dgrid regime switch threshold)
+  #   taker_cooldown_s: 30 (rgrid taker rate limit)
+  spread_bps: 0.15      # in mid mode this may be NEGATIVE (-50..+50, tread.fi scale)
   requote_bps: 0.25     # keep queue position: don't churn on sub-quarter-bps drift
   order_size_usd: 25
   leverage: 5
