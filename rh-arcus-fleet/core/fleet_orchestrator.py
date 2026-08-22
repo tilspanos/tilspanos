@@ -102,7 +102,8 @@ class FleetOrchestrator:
             spread_bps=float(p.get("spread_bps", self.cfg.spread_bps)),
             requote_bps=float(p.get("requote_bps", self.cfg.requote_bps)),
             order_size_usd=float(p.get("order_size_usd", self.cfg.order_size_usd)),
-            leverage=int(p.get("leverage", self.cfg.leverage)),
+            leverage=int(self.cfg.leverage) if self.cfg.leverage_overridden
+            else int(p.get("leverage", self.cfg.leverage)),
             refresh_ms=int(p.get("refresh_ms", self.cfg.refresh_ms)),
             max_hold_s=float(p.get("max_hold_s", self.cfg.max_hold_s)),
             adverse_stop_bps=float(p.get("adverse_stop_bps", self.cfg.adverse_stop_bps)),
@@ -490,6 +491,7 @@ class FleetOrchestrator:
             cfg.refresh_ms = refresh
         if leverage is not None:
             cfg.leverage = leverage
+            cfg.leverage_overridden = True  # dashboard beats presets from now on
         if max_markets is not None:
             cfg.max_concurrent_markets = max_markets
         if daily_loss is not None:

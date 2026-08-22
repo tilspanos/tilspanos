@@ -68,6 +68,9 @@ class FleetConfig:
     enabled_groups: list[str] = field(default_factory=lambda: ["crypto"])
     # quoting strategy: avellaneda | mid | grid | rgrid | dgrid | signal
     strategy: str = "avellaneda"
+    # True once the user sets leverage from the dashboard: from then on it
+    # overrides per-market presets when workers are (re)built.
+    leverage_overridden: bool = False
     quote_on_start: bool = False
     quote_rwa_off_hours: bool = False
     order_size_usd: float = 25.0

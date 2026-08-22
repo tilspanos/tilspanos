@@ -26,17 +26,17 @@ class RiskManager:
         self.open_order_count: int = 0
 
     def on_account_stats(self, stats: dict) -> None:
-        self.collateral = _f(
-            stats.get("equity")
-            or stats.get("collateral")
-            or stats.get("netQuoteBalance")
-            or stats.get("total_asset_value")
-        )
-        self.available_balance = _f(
-            stats.get("freeCollateral")
-            or stats.get("available_balance")
-            or stats.get("cross_asset_value")
-        )
+        # Balance = TRUE equity only (REST /v1/account carries it).
+        # Never fall back to netQuoteBalance: that is cash accounting and is
+        # inflated by short-sale proceeds / deflated by long purchases —
+        # opening a $50 short made the "balance" jump +$50. Messages without
+        # an equity field (e.g. the WS account channel) leave it untouched.
+        equity = _f(stats.get("equity"))
+        if equity is not None:
+            self.collateral = equity
+        free = _f(stats.get("freeCollateral") or stats.get("available_balance"))
+        if free is not None:
+            self.available_balance = free
         if self.collateral and self.available_balance is not None and self.collateral > 0:
             self.margin_used_fraction = 1 - (self.available_balance / self.collateral)
 
