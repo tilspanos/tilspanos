@@ -167,7 +167,7 @@ class MarketWorker:
             return
         if mid is None or book is None or not book.ready or book.age_ms > 2000:
             self._record_veto(
-                f"{m.symbol}: stale book (age={None if not book else int(book.age_ms)}ms) — not quoting blind"
+                f"{m.symbol}: stale book (age={None if not book else int(min(book.age_ms, 10**9))}ms) — not quoting blind"
             )
             return
         if m.status.upper() not in ("ONLINE", "ACTIVE"):
