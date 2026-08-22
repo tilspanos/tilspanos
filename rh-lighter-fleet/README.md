@@ -52,10 +52,13 @@ python bot.py fleet flatten-all   # cancel everything + close all positions
   `GET /api/v1/orderBooks` + `orderBookDetails` at boot and re-syncs every
   5 minutes; new markets are hot-added with default presets. Nothing is
   hardcoded per symbol.
-- `core/market_worker.py` runs the Breads MM loop per market: quote
-  mid ± spread with POST_ONLY on both sides, requote on drift, never quote
-  while holding a position (reduce-only IOC flatten first), clamp prices
-  inside the official fat-finger bounds.
+- `core/market_worker.py` runs the quoting loop per market with a
+  **switchable strategy** (`core/strategies.py`, tread.fi-style modes):
+  `avellaneda` (default, inventory-skew MM), `mid` (±offset around mid,
+  negative = aggressive), `grid` (last-fill ping-pong + soft reset),
+  `rgrid` (exposure-VWAP breakout capture with capped takers), `dgrid`
+  (auto grid↔rgrid by regime), `signal` (RSI tilt). Switch live from the
+  dashboard's Strategy dropdown; all risk rails apply to every mode.
 - `core/execution.py` sends everything through `sendTx` / `sendTxBatch` and
   handles every documented error code (fat finger, post-only cross, margin,
   order caps, nonce, rate limit). **`code=200` is never treated as an open

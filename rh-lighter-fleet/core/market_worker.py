@@ -208,7 +208,7 @@ class MarketWorker:
         if not self.enabled:
             return
         if mid is None or book is None or book.age_ms > 2000:
-            self.exec.record_veto(f"{m.symbol}: stale book (age={None if not book else int(book.age_ms)}ms) — not quoting blind")
+            self.exec.record_veto(f"{m.symbol}: stale book (age={None if not book else int(min(book.age_ms, 10**9))}ms) — not quoting blind")
             return
 
         # Auto-disable a market that keeps losing: protect the fleet's PnL.
