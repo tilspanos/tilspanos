@@ -104,15 +104,17 @@ def should_requote(
     min_tick: float,
     requote_bps: float,
 ) -> bool:
-    """Requote on a one-tick move. requote_bps of 0.25 is larger than
-    GLD's 0.24 bps/tick, so a tick change used to be ignored forever."""
-    if desired_px <= 0 or existing_px <= 0:
+    """Requote when the desired price is a different tick. Compare in
+    ticks — GLD's 0.24 bps/tick is smaller than requote_bps 0.25, and
+    float subtraction of 423.09-423.08 is not a clean 0.01."""
+    if min_tick <= 0 or desired_px <= 0:
+        return existing_px != desired_px
+    n = abs(round(existing_px / min_tick) - round(desired_px / min_tick))
+    if n == 0:
         return False
-    if abs(existing_px - desired_px) < min_tick * 0.5:
-        return False
-    drift_bps = abs(existing_px - desired_px) / desired_px * 10_000
     tick_bps = min_tick / desired_px * 10_000
-    return drift_bps >= min(requote_bps, tick_bps)
+    need = max(1, int(requote_bps / tick_bps + 1e-9)) if tick_bps > 0 else 1
+    return n >= need
 
 
 class MarketWorker:
