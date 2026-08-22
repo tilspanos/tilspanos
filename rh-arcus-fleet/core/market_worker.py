@@ -92,8 +92,27 @@ def clamp_to_touch_if_tight(
     book_spread = best_ask - best_bid
     join_threshold = max(2 * half_spread, 2 * min_tick)
     if book_spread <= join_threshold:
-        return min(bid_px, best_bid), max(ask_px, best_ask), True
+        # JOIN the touch — not "at or worse than". min/max left the ask
+        # one tick behind the best offer (GLD 423.09 behind 423.08).
+        return best_bid, best_ask, True
     return bid_px, ask_px, False
+
+
+def should_requote(
+    existing_px: float,
+    desired_px: float,
+    min_tick: float,
+    requote_bps: float,
+) -> bool:
+    """Requote on a one-tick move. requote_bps of 0.25 is larger than
+    GLD's 0.24 bps/tick, so a tick change used to be ignored forever."""
+    if desired_px <= 0 or existing_px <= 0:
+        return False
+    if abs(existing_px - desired_px) < min_tick * 0.5:
+        return False
+    drift_bps = abs(existing_px - desired_px) / desired_px * 10_000
+    tick_bps = min_tick / desired_px * 10_000
+    return drift_bps >= min(requote_bps, tick_bps)
 
 
 class MarketWorker:
@@ -507,8 +526,9 @@ class MarketWorker:
         m = self.market
         existing = self.orders[side]
         if existing and existing.status in ("pending", "open"):
+            min_tick = float(m.tick_at(desired_px or existing.price))
             drift_bps = abs(existing.price - desired_px) / desired_px * 10_000 if desired_px else 0
-            if drift_bps < self.requote_bps:
+            if not should_requote(existing.price, desired_px, min_tick, self.requote_bps):
                 return
             try:
                 await self.exec.cancel(m, **({'order_id': existing.order_id} if existing.order_id else {'client_id': existing.client_id}))

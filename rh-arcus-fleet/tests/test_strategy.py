@@ -6,6 +6,7 @@ from core.market_worker import (
     OrderState,
     clamp_to_touch_if_tight,
     min_edge_blocks,
+    should_requote,
 )
 from core.ws_hub import OrderBookState, WsHub
 
@@ -58,6 +59,11 @@ def test_join_does_not_improve():
     assert joined
     assert bid_px == bb
     assert ask_px == ba
+    # Strategy wider than the touch must still PIN to the touch, not sit behind.
+    bid_px, ask_px, joined = clamp_to_touch_if_tight(
+        99.8, 100.3, bb, ba, half_spread=0.1, min_tick=0.1
+    )
+    assert joined and bid_px == bb and ask_px == ba
 
 
 def test_wide_book_improves_inside():
@@ -79,6 +85,12 @@ def test_one_tick_book_never_min_edge_vetoes():
     assert min_edge_blocks(0.02, 0.01, 0.5, 423.0)
     # min_edge 0 never vetoes.
     assert not min_edge_blocks(0.02, 0.01, 0.0, 423.0)
+
+
+def test_gld_one_tick_move_requotes():
+    # 1 tick on GLD ≈ 0.236 bps, default requote is 0.25 — must still move.
+    assert should_requote(423.09, 423.08, 0.01, 0.25)
+    assert not should_requote(423.08, 423.08, 0.01, 0.25)
 
 
 def test_inventory_skew_long_lowers_reservation():
