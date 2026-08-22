@@ -26,7 +26,7 @@ These were paid for on Robinhood Lighter. They are structural here, not later pa
 | Never assume a `side` field | Public trades: `side` is the **taker** side. We derive **our** side from ask/bid account ids, then maker/taker addresses, then a resting order we placed. A bare `side` is ignored. |
 | MARKET min sizes silent-cancel dust | Sub-minimum positions are **topped up** to a legal size before a reduce-only IOC close. |
 | A-S inventory skew | Reservation price unloads passively. Taker flatten is an emergency backstop only (max-hold / adverse stop). |
-| Join, don't improve | Quotes clamp to the touch. Improving the book is first in line for informed flow. |
+| Join tight / improve wide | On a 1–2 tick book, join the touch. On a wide weekend RWA book (GLD is often 10+ bps), step inside toward mid so we are first in line. |
 | Contrarian gate | Skip the side pressed by momentum + book imbalance. |
 | Vol breaker + min-edge | Pull quotes when per-tick vol is violent or the book spread cannot pay for the risk. |
 | Maker-maker round trips | Every quote is `LIMIT` + `ALO` (skips the 50 ms taker speed bump). |
@@ -78,8 +78,8 @@ python bot.py fleet flatten-all   # cancel everything + close positions
   are hot-added. Nothing is hardcoded per symbol.
 - `core/market_worker.py` runs the A-S MM loop per market: join-at-touch
   ALO both sides, requote on drift, inventory skew, gates, dust top-up.
-  Equities/commodities/indices are withheld when `isOutsideRth` unless
-  `FLEET_QUOTE_RWA_OFF_HOURS=true`.
+  Equities/commodities/indices quote 24/7 by default (`FLEET_QUOTE_RWA_OFF_HOURS=true`);
+  the dashboard **RWA 24/7** toggle can restrict them to NYSE regular hours.
 - `core/execution.py` signs typed canonical payloads (Scheme 1) for
   place/cancel and Scheme 2 for `cancelAllOrders` / `setLeverage`. Batches
   of ≤39 are free on the IP weight layer. **ACK is never an open order.**

@@ -7,9 +7,17 @@ def test_load_config_view_only(monkeypatch):
     monkeypatch.delenv("DASHBOARD_PORT", raising=False)
     monkeypatch.delenv("ACCOUNT_INDEX", raising=False)
     monkeypatch.delenv("DRY_RUN", raising=False)
+    monkeypatch.delenv("FLEET_QUOTE_RWA_OFF_HOURS", raising=False)
     cfg = load_config(require_keys=False)
     assert cfg.dashboard_port == 8900
     assert cfg.account_index == 0
+    assert cfg.quote_rwa_off_hours is True
+
+
+def test_quote_rwa_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("FLEET_QUOTE_RWA_OFF_HOURS", "false")
+    cfg = load_config(require_keys=False)
+    assert cfg.quote_rwa_off_hours is False
 
 
 def test_banned_simulation_flag(monkeypatch):

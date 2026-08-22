@@ -186,12 +186,19 @@ tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
     <div class="field"><label>Daily Loss Halt ($)</label><input id="cfgLoss" type="number" min="1" step="10"></div>
     <div class="field"><label>Max Hold (s)</label><input id="cfgHold" type="number" min="10" step="10"></div>
     <div class="field"><label>Stop (bps)</label><input id="cfgStop" type="number" min="1" step="1"></div>
+    <div class="field"><label>RWA 24/7</label>
+      <select id="cfgRwa">
+        <option value="true">Quote off-hours</option>
+        <option value="false">RTH only</option>
+      </select>
+    </div>
     <button class="primary" id="btnApplyCfg">Apply</button>
   </div>
   <div class="settings-note">
     Overrides <code>.env</code> defaults and per-market presets until restart.
     Fine-tune individual markets in <code>configs/market_presets.yaml</code>.
     Leverage is pushed to the venue (cross margin) on perp markets when the fleet is live.
+    <b>RWA 24/7</b> must stay on for weekend GLD / equities / indices — Arcus marks them <code>isOutsideRth</code> outside NYSE hours.
   </div>
 </div>
 
@@ -213,9 +220,9 @@ tr:hover td { background: color-mix(in srgb, var(--panel2) 70%, transparent); }
   <table>
     <thead><tr>
       <th>Symbol</th><th>Type</th><th>Mid</th><th>Our Bid</th><th>Our Ask</th>
-      <th>Pos</th><th>Fills</th><th>Volume</th><th>PnL</th><th>Cost/1M</th><th></th>
+      <th>Pos</th><th>Fills</th><th>Volume</th><th>PnL</th><th>Cost/1M</th><th>Why</th><th></th>
     </tr></thead>
-    <tbody id="marketRows"><tr><td colspan="11" class="empty">Fleet not started</td></tr></tbody>
+    <tbody id="marketRows"><tr><td colspan="12" class="empty">Fleet not started</td></tr></tbody>
   </table>
   </div>
 </div>
@@ -267,7 +274,7 @@ const CFG_FIELDS = {
   cfgRefresh: "refresh_ms", cfgLev: "leverage", cfgMax: "max_concurrent_markets",
   cfgLoss: "daily_loss_usd", cfgHold: "max_hold_s", cfgStop: "adverse_stop_bps",
 };
-const CFG_SELECTS = { cfgStrategy: "strategy" };
+const CFG_SELECTS = { cfgStrategy: "strategy", cfgRwa: "quote_rwa_off_hours" };
 let cfgLoaded = false;
 function fillConfig(cfg, force) {
   if (!cfg || (cfgLoaded && !force)) return;
@@ -278,7 +285,7 @@ function fillConfig(cfg, force) {
   }
   for (const [id, key] of Object.entries(CFG_SELECTS)) {
     const el = $(id);
-    if (document.activeElement !== el && cfg[key] != null) el.value = cfg[key];
+    if (document.activeElement !== el && cfg[key] != null) el.value = String(cfg[key]);
   }
   cfgLoaded = true;
 }
@@ -404,8 +411,9 @@ function render(snap) {
       <td class="mono">${fmtUsd(r.volume_usd, 0)}</td>
       <td class="mono ${r.pnl >= 0 ? "pos-txt" : "neg-txt"}">${r.pnl >= 0 ? "+" : ""}${fmtUsd(r.pnl, 2).replace("+", "")}</td>
       <td class="mono ${r.cost_per_million == null ? "muted" : (r.cost_per_million <= 0 ? "pos-txt" : "neg-txt")}">${r.cost_per_million == null ? "\u2013" : fmtUsd(r.cost_per_million, 0)}</td>
+      <td class="muted" style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${(r.reason || "").replace(/"/g, "&quot;")}">${r.reason || (r.outside_rth ? "off-hours" : "")}</td>
       <td><button class="flatbtn danger" onclick="post('/api/flatten',{symbol:'${r.symbol}'})">Flatten</button></td>
-    </tr>`).join("") : '<tr><td colspan="11" class="empty">Fleet not started</td></tr>';
+    </tr>`).join("") : '<tr><td colspan="12" class="empty">Fleet not started</td></tr>';
 
   const fills = snap.fills || [];
   $("fillRows").innerHTML = fills.length ? fills.slice(0, 20).map((f) => `

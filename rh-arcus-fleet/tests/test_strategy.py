@@ -1,7 +1,12 @@
 """Strategy invariants: join-don't-improve, A-S skew, dust, min-edge, fill apply."""
 
 from core.market_registry import parse_market
-from core.market_worker import MarketWorker, OrderState
+from core.market_worker import (
+    MarketWorker,
+    OrderState,
+    clamp_to_touch_if_tight,
+    min_edge_blocks,
+)
 from core.ws_hub import OrderBookState, WsHub
 
 
@@ -46,15 +51,34 @@ def _worker(mid=100.0, pos=0.0) -> MarketWorker:
 def test_join_does_not_improve():
     w = _worker()
     book = w.book
-    # Desired inside the spread would improve; worker clamps to the touch.
-    # We exercise the same math the tick uses.
     bb, ba = book.best_bid, book.best_ask
-    bid_px = 100.0  # would improve
-    ask_px = 100.0
-    bid_px = min(bid_px, bb)
-    ask_px = max(ask_px, ba)
+    bid_px, ask_px, joined = clamp_to_touch_if_tight(
+        100.0, 100.0, bb, ba, half_spread=0.1, min_tick=0.1
+    )
+    assert joined
     assert bid_px == bb
     assert ask_px == ba
+
+
+def test_wide_book_improves_inside():
+    # Live Saturday GLD: 422.73 / 423.26 (12.5 bps). Avellaneda wants mid ± 1 tick.
+    bid_px, ask_px, joined = clamp_to_touch_if_tight(
+        422.98, 423.01, 422.73, 423.26, half_spread=0.01, min_tick=0.01
+    )
+    assert not joined
+    assert bid_px == 422.98
+    assert ask_px == 423.01
+
+
+def test_one_tick_book_never_min_edge_vetoes():
+    # GLD tick $0.01 on ~$423 = 0.24 bps. Default min_edge 0.5 used to silence it.
+    assert not min_edge_blocks(0.01, 0.01, 0.5, 423.0)
+    # A 3-tick book (0.71 bps) is still wider than 0.5 → no veto.
+    assert not min_edge_blocks(0.03, 0.01, 0.5, 423.0)
+    # A 2-tick book at 0.47 bps IS tighter than 0.5 and not one-tick → veto.
+    assert min_edge_blocks(0.02, 0.01, 0.5, 423.0)
+    # min_edge 0 never vetoes.
+    assert not min_edge_blocks(0.02, 0.01, 0.0, 423.0)
 
 
 def test_inventory_skew_long_lowers_reservation():
@@ -124,3 +148,33 @@ def test_parse_equity_group():
     m = parse_market(_btc_raw(marketDisplayName="NVDA-USD", category="EQUITIES", marketId=20))
     assert m.group == "equities"
     assert m.is_rwa
+
+
+def test_refresh_live_flags_from_stats():
+    w = _worker()
+    assert not w.market.is_outside_rth
+    w.hub.market_stats[1] = {
+        "isOutsideRth": True,
+        "status": "ONLINE",
+        "upperTradingBound": "110",
+        "lowerTradingBound": "90",
+    }
+    w._refresh_live_flags()
+    assert w.market.is_outside_rth is True
+    assert w.market.upper_bound == 110.0
+    assert w.market.lower_bound == 90.0
+
+
+def test_gld_is_rwa_commodity():
+    m = parse_market(
+        _btc_raw(
+            marketDisplayName="GLD-USD",
+            category="COMMODITIES",
+            marketId=20,
+            tickSize="0.01",
+            isOutsideRth=True,
+        )
+    )
+    assert m.group == "commodities"
+    assert m.is_rwa
+    assert m.is_outside_rth

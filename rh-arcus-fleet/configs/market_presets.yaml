@@ -5,7 +5,7 @@ defaults:
   order_size_usd: 25
   leverage: 5
   refresh_ms: 12000
-  min_edge_bps: 0.5
+  min_edge_bps: 0.2
   vol_breaker_bps: 2.5
   inventory_mult: 3.0
 
@@ -21,7 +21,9 @@ equities:
   AAPL-USD: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
 
 commodities:
-  GLD-USD: {spread_bps: 0.22, order_size_usd: 25, leverage: 3}
+  GLD-USD: {spread_bps: 0.22, order_size_usd: 25, leverage: 3, min_edge_bps: 0}
+  SLV-USD: {spread_bps: 0.25, order_size_usd: 25, leverage: 3, min_edge_bps: 0}
+  USO-USD: {spread_bps: 0.25, order_size_usd: 25, leverage: 3, min_edge_bps: 0}
 
 indices:
   SPY-USD: {spread_bps: 0.18, order_size_usd: 30, leverage: 3}

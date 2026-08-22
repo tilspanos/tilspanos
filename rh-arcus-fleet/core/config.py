@@ -72,7 +72,7 @@ class FleetConfig:
     # overrides per-market presets when workers are (re)built.
     leverage_overridden: bool = False
     quote_on_start: bool = False
-    quote_rwa_off_hours: bool = False
+    quote_rwa_off_hours: bool = True
     order_size_usd: float = 25.0
     spread_bps: float = 0.15
     requote_bps: float = 0.25
@@ -154,7 +154,7 @@ def load_config(require_keys: bool = True) -> FleetConfig:
         strategy=os.environ.get("FLEET_STRATEGY", "avellaneda").strip().lower(),
         quote_on_start=os.environ.get("FLEET_QUOTE_ON_START", "false").strip().lower()
         in ("1", "true", "yes"),
-        quote_rwa_off_hours=os.environ.get("FLEET_QUOTE_RWA_OFF_HOURS", "false").strip().lower()
+        quote_rwa_off_hours=os.environ.get("FLEET_QUOTE_RWA_OFF_HOURS", "true").strip().lower()
         in ("1", "true", "yes"),
         order_size_usd=float(os.environ.get("FLEET_ORDER_SIZE_USD", "25")),
         spread_bps=float(os.environ.get("FLEET_SPREAD_BPS", "0.15")),

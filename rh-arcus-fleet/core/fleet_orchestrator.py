@@ -83,10 +83,18 @@ class FleetOrchestrator:
             self.hub, self.rest, self._priv, self.cfg.l1_address, self.cfg.account_index
         )
         self.registry.on_new_market = self._on_new_market
+        self.registry.on_sync = self._on_registry_sync
         self.hub.on_order_update = self._route_order_update
         self.hub.on_fill_update = self._route_fill_update
         self.hub.on_account_update = self._route_account_update
         self.hub.on_position_update = self._route_position_update
+
+    async def _on_registry_sync(self) -> None:
+        """Push fresh venue fields (isOutsideRth, bounds, status) onto workers."""
+        for mid, market in self.registry.markets.items():
+            worker = self.workers.get(mid)
+            if worker is not None:
+                worker.market = market
 
     def _select_markets(self) -> list[Market]:
         candidates = self.registry.resolve_groups(self.cfg.enabled_groups)
@@ -444,6 +452,7 @@ class FleetOrchestrator:
             "daily_loss_usd": self.cfg.daily_loss_usd,
             "max_hold_s": self.cfg.max_hold_s,
             "adverse_stop_bps": self.cfg.adverse_stop_bps,
+            "quote_rwa_off_hours": self.cfg.quote_rwa_off_hours,
         }
 
     async def apply_settings(self, settings: dict) -> dict:
@@ -501,6 +510,12 @@ class FleetOrchestrator:
             cfg.max_hold_s = max_hold
         if adverse_stop is not None:
             cfg.adverse_stop_bps = adverse_stop
+        if "quote_rwa_off_hours" in settings and settings["quote_rwa_off_hours"] not in (None, ""):
+            raw = settings["quote_rwa_off_hours"]
+            if isinstance(raw, str):
+                cfg.quote_rwa_off_hours = raw.strip().lower() in ("1", "true", "yes", "on")
+            else:
+                cfg.quote_rwa_off_hours = bool(raw)
 
         changed = []
         for worker in self.workers.values():
@@ -518,6 +533,7 @@ class FleetOrchestrator:
                 worker.max_hold_s = max_hold
             if adverse_stop is not None:
                 worker.adverse_stop_bps = adverse_stop
+            worker.quote_rwa_off_hours = cfg.quote_rwa_off_hours
             if leverage is not None and worker.leverage != leverage:
                 worker.leverage = leverage
                 changed.append(worker)

@@ -150,6 +150,7 @@ class MarketRegistry:
         self.by_symbol: dict[str, Market] = {}
         self.last_sync_ts: float = 0.0
         self.on_new_market: Callable[[Market], Awaitable[None]] | None = None
+        self.on_sync: Callable[[], Awaitable[None]] | None = None
 
     @classmethod
     async def sync(cls, base_url: str = BASE_URL) -> "MarketRegistry":
@@ -179,6 +180,8 @@ class MarketRegistry:
         self.markets = seen
         self.by_symbol = {m.symbol.upper(): m for m in seen.values()}
         self.last_sync_ts = time.time()
+        if self.on_sync is not None:
+            await self.on_sync()
         return new_markets
 
     async def run_resync_loop(self, interval_s: int = RESYNC_INTERVAL_S) -> None:

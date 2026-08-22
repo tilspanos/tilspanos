@@ -2,9 +2,9 @@
 
 Strategy that worked on Lighter, applied here from day one:
   * A-S reservation skew — never taker-flatten as the normal exit
-  * join-don't-improve at the touch
+  * join the touch on a TIGHT book; improve into a WIDE book (weekend RWA)
   * contrarian gate (skip the side pressed by momentum + imbalance)
-  * vol circuit breaker, min-edge rule
+  * vol circuit breaker, tick-aware min-edge rule
   * maker-maker round trips
   * dust positions get a top-up before close (MARKET min sizes)
   * trade side from ask/bid account ids / maker-taker addresses, never a bare side
@@ -56,6 +56,46 @@ class Fill:
     role: str
 
 
+def min_edge_blocks(
+    book_spread: float,
+    min_tick: float,
+    min_edge_bps: float,
+    mid: float,
+) -> bool:
+    """Stand down only when the book is tighter than min_edge AND wider
+    than one tick. A one-tick book is the tightest legal market — vetoing
+    it (GLD is ~0.24 bps/tick vs a 0.5 bps default) means zero volume."""
+    if mid <= 0 or book_spread <= 0 or min_edge_bps <= 0:
+        return False
+    if book_spread <= min_tick * 1.01:
+        return False
+    return (book_spread / mid) * 10_000 < min_edge_bps
+
+
+def clamp_to_touch_if_tight(
+    bid_px: float,
+    ask_px: float,
+    best_bid: float | None,
+    best_ask: float | None,
+    half_spread: float,
+    min_tick: float,
+    *,
+    aggressive: bool = False,
+) -> tuple[float, float, bool]:
+    """Join the touch on a tight book (don't pay to improve). On a wide
+    book, keep the strategy prices so we step into the gap.
+
+    Returns (bid, ask, joined).
+    """
+    if aggressive or best_bid is None or best_ask is None:
+        return bid_px, ask_px, False
+    book_spread = best_ask - best_bid
+    join_threshold = max(2 * half_spread, 2 * min_tick)
+    if book_spread <= join_threshold:
+        return min(bid_px, best_bid), max(ask_px, best_ask), True
+    return bid_px, ask_px, False
+
+
 class MarketWorker:
     def __init__(
         self,
@@ -75,7 +115,7 @@ class MarketWorker:
         min_edge_bps: float = 0.5,
         vol_breaker_bps: float = 2.5,
         inventory_mult: float = 3.0,
-        quote_rwa_off_hours: bool = False,
+        quote_rwa_off_hours: bool = True,
         strategy: str = "avellaneda",
         strategy_params: dict | None = None,
     ) -> None:
@@ -126,6 +166,7 @@ class MarketWorker:
         self.our_address: str | None = None
         self.account_index: int | None = None
         self._seen_trade_ids: set[str] = set()
+        self.last_reason: str = ""
 
     @property
     def book(self):
@@ -202,15 +243,33 @@ class MarketWorker:
                 else None
             ),
             "book_age_ms": None if not self.book else min(self.book.age_ms, 10**9),
+            "reason": self.last_reason,
+            "outside_rth": self.market.is_outside_rth,
         }
 
+    def _refresh_live_flags(self) -> None:
+        """Keep RTH / bounds current — the Market object is a boot-time snapshot."""
+        stats = self.hub.market_stats.get(self.market.market_id) or {}
+        if "isOutsideRth" in stats:
+            self.market.is_outside_rth = bool(stats["isOutsideRth"])
+        if stats.get("status"):
+            self.market.status = str(stats["status"])
+        ub = _f(stats.get("upperTradingBound"))
+        lb = _f(stats.get("lowerTradingBound"))
+        if ub is not None:
+            self.market.upper_bound = ub
+        if lb is not None:
+            self.market.lower_bound = lb
+
     def _record_veto(self, reason: str) -> None:
+        self.last_reason = reason.split(": ", 1)[-1] if ": " in reason else reason
         if self.exec is not None:
             self.exec.record_veto(reason)
 
     async def tick(self, fleet_paused: bool) -> None:
         m = self.market
         self.last_tick_ts = time.time()
+        self._refresh_live_flags()
         mid = self.mid
         book = self.book
 
@@ -225,7 +284,7 @@ class MarketWorker:
             self._record_veto(f"{m.symbol}: market {m.status} — not quoting")
             return
         if m.is_rwa and m.is_outside_rth and not self.quote_rwa_off_hours:
-            self._record_veto(f"{m.symbol}: RWA off-hours — not quoting")
+            self._record_veto(f"{m.symbol}: RWA off-hours — not quoting (enable RWA 24/7)")
             await self.cancel_both_sides()
             return
 
@@ -271,6 +330,7 @@ class MarketWorker:
             self._pos_opened_ts = None
 
         if fleet_paused:
+            self.last_reason = "fleet paused"
             return
 
         min_tick = float(m.tick_at(mid))
@@ -279,10 +339,9 @@ class MarketWorker:
         breaker = None
         if self._vol_bps > max(self.vol_breaker_bps, 3 * abs(self.spread_bps)):
             breaker = f"vol {self._vol_bps:.2f}bps/tick > breaker"
-        elif bb and ba:
+        elif bb and ba and min_edge_blocks(ba - bb, min_tick, self.min_edge_bps, mid):
             book_spread_bps = (ba - bb) / mid * 10_000
-            if book_spread_bps < self.min_edge_bps:
-                breaker = f"book spread {book_spread_bps:.2f}bps < min edge {self.min_edge_bps}bps"
+            breaker = f"book spread {book_spread_bps:.2f}bps < min edge {self.min_edge_bps}bps"
         if breaker:
             self._record_veto(f"{m.symbol}: {breaker} — no new risk")
             if abs(pos) < m.min_size_step:
@@ -296,6 +355,9 @@ class MarketWorker:
         base_bps = abs(self.spread_bps)
         half_bps = max(base_bps, min(self._vol_bps * self.vol_mult, base_bps * 25))
         half_spread = max(mid * (half_bps / 10_000), min_tick) + extra
+        # Off-hours RWA books are thin — don't sit exactly on the mark.
+        if m.is_rwa and m.is_outside_rth:
+            half_spread = max(half_spread, 2 * min_tick)
         base_size = self.order_size_usd / mid
 
         anchor = mid
@@ -331,14 +393,12 @@ class MarketWorker:
         bid_size = base_size * plan.bid_size_mult * (1 - max(q_ratio, 0.0)) + max(-pos, 0.0)
         ask_size = base_size * plan.ask_size_mult * (1 - max(-q_ratio, 0.0)) + max(pos, 0.0)
 
-        # JOIN, never improve — unless the strategy explicitly wants aggression
-        # (mid mode with a negative offset).
+        # Tight book: join the touch (don't pay to improve). Wide book
+        # (weekend GLD is 10+ bps): keep strategy prices and step inside.
         aggressive_mid = self.strategy == "mid" and self.spread_bps < 0
-        if not aggressive_mid:
-            if bb:
-                bid_px = min(bid_px, bb)
-            if ba:
-                ask_px = max(ask_px, ba)
+        bid_px, ask_px, joined = clamp_to_touch_if_tight(
+            bid_px, ask_px, bb, ba, half_spread, min_tick, aggressive=aggressive_mid
+        )
 
         mark = self.mark_price or mid
         best_ask = book.best_ask or mark
@@ -401,10 +461,13 @@ class MarketWorker:
         if at_limit_short:
             bid_size = abs(pos)
 
+        mode = "join" if joined else "improve"
+        self.last_reason = f"{mode} {plan.note}".strip()
         activity.ok(
             "BOOK", m.symbol,
             f"bid={best_bid} ask={best_ask} mid={mid:.6g} "
             f"spread={(best_ask - best_bid) / mid * 10_000:.2f}bps "
+            f"{mode} → {bid_px}/{ask_px} "
             f"q={q_ratio:+.2f} imb={imbalance:+.2f} mom={self._mom_bps:+.2f}bps"
             + (f" | {plan.note}" if plan.note else ""),
         )
