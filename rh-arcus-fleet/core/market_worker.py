@@ -338,7 +338,7 @@ class MarketWorker:
         order = self.orders[side]
         if order is not None and order.status in ("pending", "open") and self.exec:
             try:
-                await self.exec.cancel(self.market, client_id=order.client_id, order_id=order.order_id)
+                await self.exec.cancel(self.market, **({'order_id': order.order_id} if order.order_id else {'client_id': order.client_id}))
                 self._mark_self_cancelled(order)
             except ExecutionError:
                 pass
@@ -354,7 +354,7 @@ class MarketWorker:
             if drift_bps < self.requote_bps:
                 return
             try:
-                await self.exec.cancel(m, client_id=existing.client_id, order_id=existing.order_id)
+                await self.exec.cancel(m, **({'order_id': existing.order_id} if existing.order_id else {'client_id': existing.client_id}))
                 self._mark_self_cancelled(existing)
                 activity.ok(
                     "ORDER", m.symbol,
@@ -431,7 +431,7 @@ class MarketWorker:
             order = self.orders[side]
             if order and order.status in ("pending", "open") and self.exec:
                 try:
-                    await self.exec.cancel(self.market, client_id=order.client_id, order_id=order.order_id)
+                    await self.exec.cancel(self.market, **({'order_id': order.order_id} if order.order_id else {'client_id': order.client_id}))
                     self._mark_self_cancelled(order)
                 except ExecutionError as exc:
                     activity.warn("ORDER", self.market.symbol, f"cancel {side} failed: {exc}")

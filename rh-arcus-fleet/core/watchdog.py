@@ -106,18 +106,32 @@ class Watchdog:
                 f"watchdog: zero sendTx for {int(silent_for)}s — see veto dump above"
             )
 
+        def has_resting(w) -> bool:
+            # Healthy resting quotes in a quiet market are NOT idleness —
+            # restarting them just churns cancels and loses queue position.
+            return any(
+                o is not None and o.status in ("pending", "open")
+                for o in w.orders.values()
+            )
+
         for worker in fleet.active_workers():
-            if now - worker.last_fill_ts > IDLE_MARKET_S and now - worker.last_tick_ts < 60:
+            if (
+                now - worker.last_fill_ts > IDLE_MARKET_S
+                and now - worker.last_tick_ts < 60
+                and not has_resting(worker)
+            ):
                 activity.warn(
                     "WATCH", worker.market.symbol,
-                    f"no fills for {IDLE_MARKET_S // 60} min — restarting worker",
+                    f"no fills for {IDLE_MARKET_S // 60} min and no resting quotes — restarting worker",
                 )
                 await fleet.restart_worker(worker.market.market_id)
                 worker.last_fill_ts = now
 
         workers = fleet.active_workers()
-        if workers and all(now - w.last_fill_ts > IDLE_FLEET_S for w in workers):
-            activity.warn("WATCH", "", "fleet idle 15 min — restarting all workers")
+        if workers and all(
+            now - w.last_fill_ts > IDLE_FLEET_S and not has_resting(w) for w in workers
+        ):
+            activity.warn("WATCH", "", "fleet idle 15 min with no resting quotes — restarting all workers")
             await fleet.restart_all_workers()
             for w in workers:
                 w.last_fill_ts = now
