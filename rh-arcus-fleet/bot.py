@@ -274,13 +274,18 @@ def main() -> int:
     fleet = sub.add_parser("fleet", help="fleet operations")
     fleet.add_argument(
         "command",
-        choices=["setup-key", "prove", "start", "dashboard", "stop", "status", "flatten", "flatten-all"],
+        choices=["setup-key", "setup-key-web", "prove", "start", "dashboard", "stop", "status", "flatten", "flatten-all"],
     )
     fleet.add_argument("symbol", nargs="?", help="market symbol for `flatten`")
     args = parser.parse_args()
 
     if args.command == "setup-key":
         return asyncio.run(cmd_setup_key())
+    if args.command == "setup-key-web":
+        # No load_config here: the signing address comes from MetaMask, so
+        # the L1_ADDRESS placeholder guard must not block this path.
+        from scripts.setup_key_web import run as setup_key_web_run
+        return asyncio.run(setup_key_web_run())
     if args.command == "prove":
         from scripts.prove_production import main as prove_main
 
