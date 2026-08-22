@@ -110,6 +110,8 @@ class FleetOrchestrator:
             min_edge_bps=float(p.get("min_edge_bps", 0.5)),
             vol_breaker_bps=float(p.get("vol_breaker_bps", 2.5)),
             inventory_mult=float(p.get("inventory_mult", 3.0)),
+            strategy=str(p.get("strategy", self.cfg.strategy)),
+            strategy_params=p,
             quote_rwa_off_hours=self.cfg.quote_rwa_off_hours,
         )
         worker.account_index = self.cfg.account_index
@@ -431,6 +433,7 @@ class FleetOrchestrator:
 
     def config_dict(self) -> dict:
         return {
+            "strategy": self.cfg.strategy,
             "order_size_usd": self.cfg.order_size_usd,
             "spread_bps": self.cfg.spread_bps,
             "requote_bps": self.cfg.requote_bps,
@@ -453,8 +456,19 @@ class FleetOrchestrator:
                 raise ValueError(f"{key} must be between {lo} and {hi}")
             return value
 
+        from .strategies import STRATEGIES
+
+        strategy = settings.get("strategy")
+        if strategy is not None and strategy != "":
+            strategy = str(strategy).lower()
+            if strategy not in STRATEGIES:
+                raise ValueError(f"strategy must be one of {', '.join(STRATEGIES)}")
+        else:
+            strategy = None
+
         order_size = _num("order_size_usd", 5, 100_000)
-        spread = _num("spread_bps", 0.01, 500)
+        # negative spread is legal in mid mode (tread.fi scale −50..+50bps)
+        spread = _num("spread_bps", -50, 500)
         requote = _num("requote_bps", 0.0, 100)
         refresh = _num("refresh_ms", 1_000, 300_000, int)
         leverage = _num("leverage", 1, 50, int)
@@ -463,6 +477,9 @@ class FleetOrchestrator:
         max_hold = _num("max_hold_s", 10, 3600)
         adverse_stop = _num("adverse_stop_bps", 1, 500)
 
+        if strategy is not None:
+            cfg.strategy = strategy
+            activity.ok("CTRL", "", f"strategy switched to '{strategy}' on all markets")
         if order_size is not None:
             cfg.order_size_usd = order_size
         if spread is not None:
@@ -485,6 +502,8 @@ class FleetOrchestrator:
 
         changed = []
         for worker in self.workers.values():
+            if strategy is not None:
+                worker.strategy = strategy
             if order_size is not None:
                 worker.order_size_usd = order_size
             if spread is not None:

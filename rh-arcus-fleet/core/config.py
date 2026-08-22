@@ -66,6 +66,8 @@ class FleetConfig:
     api_public_key: str
 
     enabled_groups: list[str] = field(default_factory=lambda: ["crypto"])
+    # quoting strategy: avellaneda | mid | grid | rgrid | dgrid | signal
+    strategy: str = "avellaneda"
     quote_on_start: bool = False
     quote_rwa_off_hours: bool = False
     order_size_usd: float = 25.0
@@ -146,6 +148,7 @@ def load_config(require_keys: bool = True) -> FleetConfig:
         api_private_key=api_private_key,
         api_public_key=api_public_key,
         enabled_groups=groups,
+        strategy=os.environ.get("FLEET_STRATEGY", "avellaneda").strip().lower(),
         quote_on_start=os.environ.get("FLEET_QUOTE_ON_START", "false").strip().lower()
         in ("1", "true", "yes"),
         quote_rwa_off_hours=os.environ.get("FLEET_QUOTE_RWA_OFF_HOURS", "false").strip().lower()

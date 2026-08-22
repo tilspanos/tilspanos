@@ -16,11 +16,15 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from collections import deque
+
+from . import strategies
 from .config import MIN_QUOTE_USDG
 from .execution import REJECT_HINTS, ExecutionEngine, ExecutionError
 from .fills import derive_fill_side
 from .logging_utils import activity
 from .market_registry import Market
+from .strategies import QuoteContext
 from .ws_hub import WsHub
 
 
@@ -72,6 +76,8 @@ class MarketWorker:
         vol_breaker_bps: float = 2.5,
         inventory_mult: float = 3.0,
         quote_rwa_off_hours: bool = False,
+        strategy: str = "avellaneda",
+        strategy_params: dict | None = None,
     ) -> None:
         self.market = market
         self.hub = hub
@@ -108,6 +114,15 @@ class MarketWorker:
         self._mom_bps: float = 0.0
         self._last_topup_ts: float = 0.0
         self._self_cancelled: set[str] = set()
+        self.strategy = strategy if strategy in strategies.STRATEGIES else "avellaneda"
+        self.strategy_params = dict(strategy_params or {})
+        self._last_buy_px: float | None = None
+        self._last_sell_px: float | None = None
+        self._fill_window: deque[tuple[float, float]] = deque(maxlen=20)
+        self._rsi_gain: float | None = None
+        self._rsi_loss: float | None = None
+        self._rsi: float | None = None
+        self._last_taker_ts: float = 0.0
         self.our_address: str | None = None
         self.account_index: int | None = None
         self._seen_trade_ids: set[str] = set()
@@ -128,6 +143,42 @@ class MarketWorker:
     @property
     def mark_price(self) -> float | None:
         return self.hub.mark_price(self.market.market_id) or self.market.mark_price
+
+    @property
+    def exposure_px(self) -> float | None:
+        """Rolling VWAP of our recent fills (both legs) — the rgrid anchor."""
+        if not self._fill_window:
+            return None
+        notional = sum(px * s for px, s in self._fill_window)
+        qty = sum(s for _, s in self._fill_window)
+        return notional / qty if qty > 0 else None
+
+    async def _execute_takers(self, plan, base_size: float, max_inv_base: float, mid: float) -> None:
+        """Strategy-requested taker IOCs (rgrid breakout capture): capped by
+        inventory headroom, rate-limited, slippage-capped."""
+        m = self.market
+        if self.exec is None:
+            return
+        cooldown = float(self.strategy_params.get("taker_cooldown_s", 30))
+        if time.time() - self._last_taker_ts < cooldown:
+            return
+        for is_ask, frac in plan.taker:
+            headroom = max_inv_base - (-self.position.size if is_ask else self.position.size)
+            size = min(base_size * abs(frac), max(headroom, 0.0))
+            size = m.round_size(size)
+            if size < m.min_base_amount or size * mid < max(m.min_quote_amount, MIN_QUOTE_USDG):
+                continue
+            worst = mid * (0.995 if is_ask else 1.005)
+            try:
+                await self.exec.place_market_ioc(
+                    m, is_ask=is_ask, size_base=size,
+                    worst_price=m.round_price(worst, "ask" if is_ask else "bid"),
+                    reduce_only=False,
+                )
+                self._last_taker_ts = time.time()
+                activity.ok("STRAT", m.symbol, plan.note)
+            except ExecutionError as exc:
+                activity.err("STRAT", m.symbol, f"taker failed: {exc}")
 
     def status_row(self) -> dict:
         bid = self.orders["bid"]
@@ -192,6 +243,14 @@ class MarketWorker:
             ret_bps = (mid - self._last_mid) / self._last_mid * 10_000
             self._vol_bps = 0.8 * self._vol_bps + 0.2 * abs(ret_bps)
             self._mom_bps = 0.5 * self._mom_bps + 0.5 * ret_bps
+            alpha = 1 / 14  # Wilder RSI(14)
+            gain, loss = max(ret_bps, 0.0), max(-ret_bps, 0.0)
+            self._rsi_gain = gain if self._rsi_gain is None else (1 - alpha) * self._rsi_gain + alpha * gain
+            self._rsi_loss = loss if self._rsi_loss is None else (1 - alpha) * self._rsi_loss + alpha * loss
+            if self._rsi_loss == 0:
+                self._rsi = 100.0 if self._rsi_gain else 50.0
+            else:
+                self._rsi = 100.0 - 100.0 / (1 + self._rsi_gain / self._rsi_loss)
         self._last_mid = mid
 
         pos = self.position.size
@@ -217,23 +276,25 @@ class MarketWorker:
         min_tick = float(m.tick_at(mid))
         bb, ba = book.best_bid, book.best_ask
 
-        if self._vol_bps > max(self.vol_breaker_bps, 3 * self.spread_bps):
-            self._record_veto(f"{m.symbol}: vol {self._vol_bps:.2f}bps/tick > breaker — quotes pulled")
-            await self.cancel_both_sides()
-            return
-        if bb and ba:
+        breaker = None
+        if self._vol_bps > max(self.vol_breaker_bps, 3 * abs(self.spread_bps)):
+            breaker = f"vol {self._vol_bps:.2f}bps/tick > breaker"
+        elif bb and ba:
             book_spread_bps = (ba - bb) / mid * 10_000
             if book_spread_bps < self.min_edge_bps:
-                self._record_veto(
-                    f"{m.symbol}: book spread {book_spread_bps:.2f}bps < min edge {self.min_edge_bps}bps — not quoting"
-                )
+                breaker = f"book spread {book_spread_bps:.2f}bps < min edge {self.min_edge_bps}bps"
+        if breaker:
+            self._record_veto(f"{m.symbol}: {breaker} — no new risk")
+            if abs(pos) < m.min_size_step:
                 await self.cancel_both_sides()
                 return
+            # holding inventory: the reducing side keeps working below
 
         if self._extra_spread_ticks:
             self._extra_spread_ticks -= 1
         extra = self._extra_spread_ticks * min_tick
-        half_bps = max(self.spread_bps, min(self._vol_bps * self.vol_mult, self.spread_bps * 25))
+        base_bps = abs(self.spread_bps)
+        half_bps = max(base_bps, min(self._vol_bps * self.vol_mult, base_bps * 25))
         half_spread = max(mid * (half_bps / 10_000), min_tick) + extra
         base_size = self.order_size_usd / mid
 
@@ -248,18 +309,36 @@ class MarketWorker:
 
         max_inv_base = max(base_size * self.inventory_mult, m.min_size_step)
         q_ratio = max(-1.0, min(1.0, pos / max_inv_base))
-        reservation = anchor - q_ratio * half_spread
-        bid_px = reservation - half_spread
-        ask_px = reservation + half_spread
+        ctx = QuoteContext(
+            mid=mid, anchor=anchor, half_spread=half_spread,
+            spread_bps=self.spread_bps, best_bid=bb, best_ask=ba,
+            min_tick=min_tick, position=pos, q_ratio=q_ratio,
+            mom_bps=self._mom_bps, vol_bps=self._vol_bps, imbalance=imbalance,
+            last_buy_px=self._last_buy_px, last_sell_px=self._last_sell_px,
+            exposure_px=self.exposure_px, rsi=self._rsi,
+            params=self.strategy_params,
+        )
+        plan = strategies.compute(self.strategy, ctx)
 
-        bid_size = base_size * (1 - max(q_ratio, 0.0)) + max(-pos, 0.0)
-        ask_size = base_size * (1 - max(-q_ratio, 0.0)) + max(pos, 0.0)
+        if plan.taker and not breaker:
+            await self._execute_takers(plan, base_size, max_inv_base, mid)
 
-        # JOIN, never improve.
-        if bb:
-            bid_px = min(bid_px, bb)
-        if ba:
-            ask_px = max(ask_px, ba)
+        strategy_skip_bid = plan.bid_px is None
+        strategy_skip_ask = plan.ask_px is None
+        bid_px = plan.bid_px if plan.bid_px is not None else mid
+        ask_px = plan.ask_px if plan.ask_px is not None else mid
+
+        bid_size = base_size * plan.bid_size_mult * (1 - max(q_ratio, 0.0)) + max(-pos, 0.0)
+        ask_size = base_size * plan.ask_size_mult * (1 - max(-q_ratio, 0.0)) + max(pos, 0.0)
+
+        # JOIN, never improve — unless the strategy explicitly wants aggression
+        # (mid mode with a negative offset).
+        aggressive_mid = self.strategy == "mid" and self.spread_bps < 0
+        if not aggressive_mid:
+            if bb:
+                bid_px = min(bid_px, bb)
+            if ba:
+                ask_px = max(ask_px, ba)
 
         mark = self.mark_price or mid
         best_ask = book.best_ask or mark
@@ -287,10 +366,24 @@ class MarketWorker:
         bid_px = m.round_price(bid_px, "bid")
         ask_px = m.round_price(ask_px, "ask")
 
+        reducing_bid = pos < -m.min_size_step  # a bid closes a short
+        reducing_ask = pos > m.min_size_step   # an ask closes a long
         gate = 0.5
-        strong_mom = max(0.8, 2 * self.spread_bps)
-        skip_bid = self._mom_bps < -strong_mom or (self._mom_bps < -0.3 and imbalance < -gate)
-        skip_ask = self._mom_bps > strong_mom or (self._mom_bps > 0.3 and imbalance > gate)
+        strong_mom = max(0.8, 2 * abs(self.spread_bps))
+        if plan.use_contrarian_gate:
+            skip_bid = self._mom_bps < -strong_mom or (self._mom_bps < -0.3 and imbalance < -gate)
+            skip_ask = self._mom_bps > strong_mom or (self._mom_bps > 0.3 and imbalance > gate)
+        else:
+            skip_bid = skip_ask = False
+        skip_bid = skip_bid or strategy_skip_bid
+        skip_ask = skip_ask or strategy_skip_ask
+        if breaker:  # breakers block only NEW risk
+            skip_bid = skip_bid or not reducing_bid
+            skip_ask = skip_ask or not reducing_ask
+        if reducing_bid and not strategy_skip_bid:
+            skip_bid = False
+        if reducing_ask and not strategy_skip_ask:
+            skip_ask = False
 
         min_quote = max(m.min_quote_amount, MIN_QUOTE_USDG)
 
@@ -312,7 +405,8 @@ class MarketWorker:
             "BOOK", m.symbol,
             f"bid={best_bid} ask={best_ask} mid={mid:.6g} "
             f"spread={(best_ask - best_bid) / mid * 10_000:.2f}bps "
-            f"q={q_ratio:+.2f} imb={imbalance:+.2f} mom={self._mom_bps:+.2f}bps",
+            f"q={q_ratio:+.2f} imb={imbalance:+.2f} mom={self._mom_bps:+.2f}bps"
+            + (f" | {plan.note}" if plan.note else ""),
         )
 
         if skip_bid or at_limit_long:
@@ -581,6 +675,12 @@ class MarketWorker:
         self.fill_count += 1
         self.volume_usd += notional
         self.last_fill_ts = time.time()
+        # strategy anchors (grid ping-pong + rgrid exposure VWAP)
+        if is_ask:
+            self._last_sell_px = price
+        else:
+            self._last_buy_px = price
+        self._fill_window.append((price, size))
         fill = Fill(
             ts=time.time(),
             side="SELL" if is_ask else "BUY",
