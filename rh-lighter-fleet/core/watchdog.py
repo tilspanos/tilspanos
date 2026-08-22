@@ -91,20 +91,33 @@ class Watchdog:
                 f"watchdog: zero sendTx for {int(silent_for)}s — see veto dump above"
             )
 
-        # 3. Idle market: no fills for 5 min → restart that worker.
+        # 3. Idle market: no fills AND no resting quotes → restart that worker.
+        #    Healthy resting orders in a quiet market are not idleness.
+        def _has_resting(w) -> bool:
+            return any(
+                o is not None and o.status in ("pending", "open")
+                for o in w.orders.values()
+            )
+
         for worker in fleet.active_workers():
-            if now - worker.last_fill_ts > IDLE_MARKET_S and now - worker.last_tick_ts < 60:
+            if (
+                now - worker.last_fill_ts > IDLE_MARKET_S
+                and now - worker.last_tick_ts < 60
+                and not _has_resting(worker)
+            ):
                 activity.warn(
                     "WATCH", worker.market.symbol,
-                    f"no fills for {IDLE_MARKET_S // 60} min — restarting worker",
+                    f"no fills for {IDLE_MARKET_S // 60} min and no resting quotes — restarting worker",
                 )
                 await fleet.restart_worker(worker.market.market_id)
                 worker.last_fill_ts = now  # avoid immediate re-trigger
 
-        # 4. Idle fleet: no fills anywhere for 15 min → restart everything.
+        # 4. Idle fleet: nothing filled and nothing resting anywhere → restart all.
         workers = fleet.active_workers()
-        if workers and all(now - w.last_fill_ts > IDLE_FLEET_S for w in workers):
-            activity.warn("WATCH", "", "fleet idle 15 min — restarting all workers")
+        if workers and all(
+            now - w.last_fill_ts > IDLE_FLEET_S and not _has_resting(w) for w in workers
+        ):
+            activity.warn("WATCH", "", "fleet idle 15 min with no resting quotes — restarting all workers")
             await fleet.restart_all_workers()
             for w in workers:
                 w.last_fill_ts = now
