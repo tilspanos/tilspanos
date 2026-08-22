@@ -55,9 +55,24 @@ const TYPED = __TYPED_DATA__;
 const el = (m, cls) => { const s=document.getElementById('status'); s.className=cls||''; s.textContent=m; };
 document.getElementById('go').onclick = async () => {
   try {
-    if (!window.ethereum) { el('Δεν βρέθηκε MetaMask σε αυτόν τον browser.', 'err'); return; }
+    if (!window.ethereum) { el('Δεν βρέθηκε wallet extension σε αυτόν τον browser.', 'err'); return; }
     const [addr] = await window.ethereum.request({method:'eth_requestAccounts'});
-    el('Υπογραφή στο MetaMask…');
+    // Some wallets (Zerion, MetaMask) refuse typed-data whose chainId differs
+    // from the active network — switch to Robinhood Chain first.
+    const wantHex = '0x' + TYPED.domain.chainId.toString(16);
+    try {
+      const cur = await window.ethereum.request({method:'eth_chainId'});
+      if (cur !== wantHex) {
+        el('Αλλαγή δικτύου σε Robinhood Chain…');
+        await window.ethereum.request({
+          method:'wallet_switchEthereumChain', params:[{chainId: wantHex}]
+        });
+      }
+    } catch (e) {
+      el('Το wallet δεν έχει το Robinhood Chain (chainId 4663). Πρόσθεσέ το/επίλεξέ το μέσα στο wallet (όπως όταν έκανες deposit στο arcus.xyz) και ξαναπάτα το κουμπί.', 'err');
+      return;
+    }
+    el('Υπογραφή στο wallet…');
     const sig = await window.ethereum.request({
       method:'eth_signTypedData_v4', params:[addr, JSON.stringify(TYPED)]
     });
