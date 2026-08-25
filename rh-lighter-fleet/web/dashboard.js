@@ -481,6 +481,16 @@ function cardCaption(totals, cpm, snap) {
   return `${fmtUsd(totals.volume, 0)} · CPM ${cpmTxt} · ${bps} · realised ${fmtUsdSigned(totals.realised, 2)}`;
 }
 
+function fitFont(ctx, text, family, maxPx, minPx, maxWidth) {
+  let size = maxPx;
+  while (size > minPx) {
+    ctx.font = `500 ${size}px ${family}`;
+    if (ctx.measureText(text).width <= maxWidth) return size;
+    size -= 2;
+  }
+  return minPx;
+}
+
 async function paintCard(snap) {
   const career = updateCareer(snap);
   const liveJ = journalOf(snap);
@@ -495,16 +505,16 @@ async function paintCard(snap) {
   const ctx = canvas.getContext("2d");
 
   await Promise.all([
-    document.fonts.load('500 14px Outfit'),
-    document.fonts.load('600 22px Outfit'),
-    document.fonts.load('500 88px "IBM Plex Mono"'),
-    document.fonts.load('500 36px "IBM Plex Mono"'),
+    document.fonts.load("600 32px Outfit"),
+    document.fonts.load("500 28px Outfit"),
+    document.fonts.load('500 108px "IBM Plex Mono"'),
+    document.fonts.load('500 64px "IBM Plex Mono"'),
   ]).catch(() => {});
 
   ctx.fillStyle = "#070707";
   ctx.fillRect(0, 0, W, H);
 
-  const wash = ctx.createRadialGradient(540, 220, 20, 540, 180, 520);
+  const wash = ctx.createRadialGradient(540, 200, 20, 540, 160, 520);
   wash.addColorStop(0, "rgba(255,255,255,0.10)");
   wash.addColorStop(0.35, "rgba(61,255,154,0.10)");
   wash.addColorStop(1, "rgba(7,7,7,0)");
@@ -516,7 +526,7 @@ async function paintCard(snap) {
   ctx.fillStyle = corner;
   ctx.fillRect(700, 0, 380, 360);
 
-  drawStar(ctx, 540, 210, 92);
+  drawStar(ctx, 540, 188, 100);
 
   ctx.strokeStyle = "rgba(255,255,255,0.16)";
   ctx.lineWidth = 2;
@@ -533,101 +543,107 @@ async function paintCard(snap) {
     loadImage("/assets/robinhood.svg"),
   ]);
 
-  const iconH = 54;
+  const iconH = 70;
   const iconW = iconH * (lgIcon.width / lgIcon.height);
-  const wordH = 38;
+  const wordH = 48;
   const wordW = wordH * (lgWord.width / lgWord.height);
-  const rhH = 34;
+  const rhH = 42;
   const rhW = rhH * (rhWord.width / rhWord.height);
-  const lockW = iconW + 14 + wordW + 22 + rhW;
+  const lockW = iconW + 16 + wordW + 24 + rhW;
   let x = (W - lockW) / 2;
-  const y = 118;
-  ctx.drawImage(lgIcon, x, y - 6, iconW, iconH);
-  punchNearBlack(ctx, x, y - 6, iconW, iconH);
-  x += iconW + 14;
-  ctx.drawImage(lgWord, x, y + 4, wordW, wordH);
-  punchNearBlack(ctx, x, y + 4, wordW, wordH);
-  x += wordW + 22;
-  ctx.drawImage(rhWord, x, y + 8, rhW, rhH);
+  const y = 96;
+  ctx.drawImage(lgIcon, x, y - 4, iconW, iconH);
+  punchNearBlack(ctx, x, y - 4, iconW, iconH);
+  x += iconW + 16;
+  ctx.drawImage(lgWord, x, y + 8, wordW, wordH);
+  punchNearBlack(ctx, x, y + 8, wordW, wordH);
+  x += wordW + 24;
+  ctx.drawImage(rhWord, x, y + 12, rhW, rhH);
 
-  ctx.fillStyle = "#8d8d8d";
-  ctx.font = "600 13px Outfit";
-  ctx.letterSpacing = "0.22em";
+  ctx.fillStyle = "#b8b8b8";
+  ctx.font = "600 32px Outfit";
+  ctx.letterSpacing = "0.16em";
   ctx.textAlign = "center";
-  ctx.fillText("MARKET MAKER", W / 2, 214);
+  ctx.fillText("MARKET MAKER", W / 2, 204);
   ctx.letterSpacing = "0px";
 
+  const vol = fmtUsd(Math.round(totals.volume), 0);
   ctx.fillStyle = "#f3f3f3";
-  ctx.font = '500 92px "IBM Plex Mono"';
   ctx.textAlign = "center";
-  ctx.fillText(fmtUsd(Math.round(totals.volume), 0), W / 2, 430);
+  const volSize = fitFont(ctx, vol, '"IBM Plex Mono"', 108, 64, W - 160);
+  ctx.font = `500 ${volSize}px "IBM Plex Mono"`;
+  ctx.fillText(vol, W / 2, 360);
 
-  ctx.fillStyle = "#8d8d8d";
-  ctx.font = "600 13px Outfit";
-  ctx.letterSpacing = "0.18em";
-  ctx.fillText("TOTAL VOLUME", W / 2, 468);
+  ctx.fillStyle = "#c4c4c4";
+  ctx.font = "600 28px Outfit";
+  ctx.letterSpacing = "0.14em";
+  ctx.fillText("TOTAL VOLUME", W / 2, 408);
   ctx.letterSpacing = "0px";
-  ctx.font = "500 18px Outfit";
-  ctx.fillStyle = "#cfcfcf";
-  ctx.fillText(marketLine(snap), W / 2, 502);
+  ctx.font = "500 28px Outfit";
+  ctx.fillStyle = "#e8e8e8";
+  ctx.fillText(marketLine(snap), W / 2, 452);
 
   const tiles = [
-    ["CPM", cpm == null ? "—" : fmtUsd(cpm, 0) + " / $1M", cpm != null && cpm <= 0],
-    ["BPS", cpm == null ? "—" : (cpm / 100).toFixed(2) + " bps", cpm != null && cpm <= 0],
-    ["Realised", fmtUsdSigned(totals.realised, 2), totals.realised >= 0],
-    ["Fills", String(totals.fills), true],
+    { k: "CPM", v: cpm == null ? "—" : fmtUsd(cpm, 0), s: cpm == null ? "" : "/ $1M", ok: cpm != null && cpm <= 0, fill: false },
+    { k: "BPS", v: cpm == null ? "—" : (cpm / 100).toFixed(2), s: cpm == null ? "" : "bps", ok: cpm != null && cpm <= 0, fill: false },
+    { k: "Realised", v: fmtUsdSigned(totals.realised, 2), s: "", ok: totals.realised >= 0, fill: false },
+    { k: "Fills", v: String(totals.fills), s: "", ok: true, fill: true },
   ];
-  const gap = 18;
+  const gap = 22;
   const tw = (W - 72 - 48 - gap) / 2;
-  const th = 150;
+  const th = 232;
   tiles.forEach((t, i) => {
     const col = i % 2;
     const row = Math.floor(i / 2);
     const tx = 60 + col * (tw + gap);
-    const ty = 560 + row * (th + gap);
+    const ty = 500 + row * (th + gap);
     ctx.fillStyle = "#101010";
-    roundRect(ctx, tx, ty, tw, th, 22);
+    roundRect(ctx, tx, ty, tw, th, 24);
     ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = "#8d8d8d";
-    ctx.font = "600 12px Outfit";
+    ctx.fillStyle = "#c4c4c4";
+    ctx.font = "600 26px Outfit";
     ctx.textAlign = "left";
-    ctx.letterSpacing = "0.16em";
-    ctx.fillText(t[0].toUpperCase(), tx + 22, ty + 36);
+    ctx.letterSpacing = "0.10em";
+    ctx.fillText(t.k.toUpperCase(), tx + 28, ty + 52);
     ctx.letterSpacing = "0px";
-    ctx.fillStyle = t[2] ? "#3dff9a" : "#ff5d6c";
-    if (t[0] === "Fills") ctx.fillStyle = "#f3f3f3";
-    ctx.font = '500 36px "IBM Plex Mono"';
-    ctx.fillText(t[1], tx + 22, ty + 96);
+    ctx.fillStyle = t.fill ? "#f3f3f3" : t.ok ? "#3dff9a" : "#ff5d6c";
+    const valueSize = fitFont(ctx, t.v, '"IBM Plex Mono"', 64, 36, tw - 56);
+    ctx.font = `500 ${valueSize}px "IBM Plex Mono"`;
+    ctx.fillText(t.v, tx + 28, ty + 132);
+    if (t.s) {
+      ctx.fillStyle = "#d0d0d0";
+      ctx.font = "500 28px Outfit";
+      ctx.fillText(t.s, tx + 28, ty + 180);
+    }
   });
 
-  const footerY = 1188;
-  ctx.fillStyle = "#8d8d8d";
-  ctx.font = "600 12px Outfit";
-  ctx.textAlign = "left";
-  ctx.letterSpacing = "0.14em";
   const since = totals.since ? new Date(totals.since).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
   const footer = scope === "all"
     ? `ALL RUNS · ${totals.sessions} session${totals.sessions === 1 ? "" : "s"} · since ${since}`
     : "THIS SESSION · since last Start";
-  ctx.fillText(footer, 72, footerY);
+  ctx.fillStyle = "#d0d0d0";
+  ctx.font = "600 24px Outfit";
+  ctx.textAlign = "left";
+  ctx.letterSpacing = "0.06em";
+  ctx.fillText(footer, 72, 1088);
   ctx.letterSpacing = "0px";
-  ctx.font = '500 14px "IBM Plex Mono"';
+  ctx.font = '500 24px "IBM Plex Mono"';
   ctx.textAlign = "right";
-  ctx.fillStyle = "#cfcfcf";
-  ctx.fillText(shortWallet(venue.wallet), W - 72, footerY);
+  ctx.fillStyle = "#f3f3f3";
+  ctx.fillText(shortWallet(venue.wallet), W - 72, 1088);
 
-  ctx.fillStyle = "rgba(255,255,255,0.06)";
-  roundRect(ctx, 72, 1220, W - 144, 10, 999);
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  roundRect(ctx, 72, 1130, W - 144, 16, 999);
   ctx.fill();
-  const bar = Math.max(0.06, Math.min(1, Math.log10(Math.max(totals.volume, 1)) / 6));
+  const bar = Math.max(0.08, Math.min(1, Math.log10(Math.max(totals.volume, 1)) / 6));
   const vg = ctx.createLinearGradient(72, 0, 72 + (W - 144) * bar, 0);
   vg.addColorStop(0, "#3dff9a");
   vg.addColorStop(1, "#8b7cff");
   ctx.fillStyle = vg;
-  roundRect(ctx, 72, 1220, (W - 144) * bar, 10, 999);
+  roundRect(ctx, 72, 1130, (W - 144) * bar, 16, 999);
   ctx.fill();
 
   lastCaption = cardCaption(totals, cpm, snap);

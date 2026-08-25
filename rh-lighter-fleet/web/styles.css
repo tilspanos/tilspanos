@@ -452,14 +452,16 @@ tr:hover td { background: rgba(255, 255, 255, 0.02); }
 }
 .overlay.on { display: flex; }
 .share-box {
-  width: min(420px, 100%);
+  width: min(580px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  overflow: auto;
   background: #0b0b0b;
   border: 1px solid var(--hair);
   border-radius: 26px;
   padding: 18px;
 }
 .share-box h3 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
-.share-box p.hint { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+.share-box p.hint { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
 .share-preview {
   width: 100%;
   aspect-ratio: 1080 / 1350;
