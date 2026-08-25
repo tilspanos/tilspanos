@@ -2,6 +2,9 @@
 
 Endpoints:
   GET  /               dashboard (web/index.html)
+  GET  /styles.css     dashboard stylesheet
+  GET  /dashboard.js   dashboard UI (no trading logic)
+  GET  /assets/*       venue wordmarks
   GET  /api/status     full fleet snapshot (stats, markets, fills, universe)
   GET  /api/markets    market universe + enabled set
   POST /api/start      start the fleet
@@ -25,7 +28,23 @@ from aiohttp import WSMsgType, web
 from core.fleet_orchestrator import FleetOrchestrator
 from core.logging_utils import activity
 
-INDEX_PATH = Path(__file__).resolve().parent / "index.html"
+WEB_DIR = Path(__file__).resolve().parent
+INDEX_PATH = WEB_DIR / "index.html"
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _decorate(fleet: FleetOrchestrator, snap: dict) -> dict:
+    """Attach venue chrome for the dashboard. Does not change trading state."""
+    out = dict(snap)
+    out["venue"] = {
+        "name": "Lighter",
+        "partner": "Robinhood",
+        "chain_id": 466324,
+        "wallet": getattr(fleet.cfg, "l1_address", "") or "",
+        "collateral": "USDG",
+        "host": "api.rh.lighter.xyz",
+    }
+    return out
 
 
 def build_app(fleet: FleetOrchestrator) -> web.Application:
@@ -34,10 +53,16 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
 
     async def index(_request: web.Request) -> web.FileResponse:
         # no-store: browsers must always fetch the current dashboard code
-        return web.FileResponse(INDEX_PATH, headers={"Cache-Control": "no-store"})
+        return web.FileResponse(INDEX_PATH, headers=_NO_STORE)
+
+    async def stylesheet(_request: web.Request) -> web.FileResponse:
+        return web.FileResponse(WEB_DIR / "styles.css", headers=_NO_STORE)
+
+    async def script(_request: web.Request) -> web.FileResponse:
+        return web.FileResponse(WEB_DIR / "dashboard.js", headers=_NO_STORE)
 
     async def status(_request: web.Request) -> web.Response:
-        return web.json_response(fleet.snapshot())
+        return web.json_response(_decorate(fleet, fleet.snapshot()))
 
     async def markets(_request: web.Request) -> web.Response:
         return web.json_response(
@@ -115,7 +140,7 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
                 if events:
                     last_seq = events[-1]["seq"]
                 await ws.send_str(
-                    json.dumps({"snapshot": fleet.snapshot(), "events": events})
+                    json.dumps({"snapshot": _decorate(fleet, fleet.snapshot()), "events": events})
                 )
                 # drain any client pings without blocking the push cadence
                 try:
@@ -129,6 +154,9 @@ def build_app(fleet: FleetOrchestrator) -> web.Application:
         return ws
 
     app.router.add_get("/", index)
+    app.router.add_get("/styles.css", stylesheet)
+    app.router.add_get("/dashboard.js", script)
+    app.router.add_static("/assets", WEB_DIR / "assets")
     app.router.add_get("/api/status", status)
     app.router.add_get("/api/markets", markets)
     app.router.add_post("/api/start", start)
