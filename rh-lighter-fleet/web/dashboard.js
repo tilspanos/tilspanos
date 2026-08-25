@@ -722,6 +722,9 @@ function connect() {
 if (PREVIEW) {
   $("connBadge").textContent = "preview";
   render(DEMO);
+  if (new URLSearchParams(location.search).has("card")) {
+    openShare();
+  }
 } else {
   fetch("/api/status").then((r) => r.json()).then(render).catch(() => {});
   connect();
